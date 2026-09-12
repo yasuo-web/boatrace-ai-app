@@ -141,6 +141,19 @@ def generate_sample_predictions():
   return pd.DataFrame(predictions)
 
 
+def highlight_high_ev(df):
+  """AI期待値が1.0以上の行のスタイルを設定する関数"""
+
+  def apply_style(row):
+    if row["AI期待値"] >= 1.0:
+      return [
+          "color: #ff4b4b; font-weight: bold;" for _ in range(len(row))
+      ]  # 赤字＋太字
+    return [""] * len(row)
+
+  return df.style.apply(apply_style, axis=1)
+
+
 # --- 本日開催会場の動的取得 ---
 with st.spinner("現在開催中の会場を取得中..."):
   active_places = fetch_active_places_cached(date_str)
@@ -272,8 +285,9 @@ else:
 
       df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
 
+      # 期待値1.0以上のハイライトを適用して表示
       st.dataframe(
-          df_top5[DISPLAY_COLS],
+          highlight_high_ev(df_top5[DISPLAY_COLS]),
           hide_index=True,
           use_container_width=True,
       )
@@ -323,8 +337,9 @@ else:
             subset=["買い目"]
         )
         st.write("")
+        # 期待値1.0以上のハイライトを適用して表示
         st.dataframe(
-            df_hole[DISPLAY_COLS],
+            highlight_high_ev(df_hole[DISPLAY_COLS]),
             hide_index=True,
             use_container_width=True,
         )

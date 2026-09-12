@@ -1,0 +1,101 @@
+{
+  "updated_at": "20260912",
+  "data": {
+    "01": {
+      "place_name": "桐生",
+      "races": {}
+    },
+    "02": {
+      "place_name": "戸田",
+      "races": {}
+    },
+    "03": {
+      "place_name": "江戸川",
+      "races": {}
+    },
+    "04": {
+      "place_name": "平和島",
+      "races": {}
+    },
+    "05": {
+      "place_name": "多摩川",
+      "races": {}
+    },
+    "06": {
+      "place_name": "浜名湖",
+      "races": {}
+    },
+    "07": {
+      "place_name": "蒲郡",
+      "races": {}
+    },
+    "08": {
+      "place_name": "常滑",
+      "races": {}
+    },
+    "09": {
+      "place_name": "津",
+      "races": {}
+    },
+    "10": {
+      "place_name": "三国",
+      "races": {}
+    },
+    "11": {
+      "place_name": "びわこ",
+      "races": {}
+    },
+    "12": {
+      "place_name": "住之江",
+      "races": {}
+    },
+    "13": {
+      "place_name": "尼崎",
+      "races": {}
+    },
+    "14": {
+      "place_name": "鳴門",
+      "races": {}
+    },
+    "15": {
+      "place_name": "丸亀",
+      "races": {}
+    },
+    "16": {
+      "place_name": "児島",
+      "races": {}
+    },
+    "17": {
+      "place_name": "宮島",
+      "races": {}
+    },
+    "18": {
+      "place_name": "徳山",
+      "races": {}
+    },
+    "19": {
+      "place_name": "下関",
+      "races": {}
+    },
+    "20": {
+      "place_name": "若松",
+      "races": {}
+    },
+    "21": {
+      "place_name": "芦屋",
+      "races": {}
+    },
+    "22": {
+      "place_name": "福岡",
+      "races": {}
+    },
+    "23": {
+      "place_name": "唐津",
+      "races": {}
+    },
+    "24": {
+      "place_name": "大村",
+      "races": {}
+    }
+  }
+}

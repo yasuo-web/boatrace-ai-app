@@ -4,97 +4,28 @@ import random
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
-import requests
-import streamlit as st
-
-# ※ scraper から必要な関数をインポート
 from scraper import (
     create_features,
+    get_active_places,
     get_odds_data,
     get_purchasable_races,
     get_race_data,
+    get_race_results,
 )
+import streamlit as st
 
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
 
-# --- キャッシュ定義：日付ごとに個別にキャッシュするように修正 ---
+# --- キャッシュ定義 ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_active_places_by_date(target_date_str: str):
-  """指定日付（YYYYMMDD）の開催会場リストを取得する"""
-  # scraper側の get_active_places が日付に対応していない場合への安全対策付き取得
-  try:
-    from scraper import get_active_places
-
-    # 1. scraper側の関数を呼び出し
-    places = get_active_places(target_date_str)
-    if places:
-      return places
-  except Exception:
-    pass
-
-  # 2. 上記で取れなかった場合の自前フォールバック処理（Direct Requests）
-  return get_active_places_direct(target_date_str)
-
-
-def get_active_places_direct(date_str: str):
-  """公式Webから指定日付(YYYYMMDD)の開催会場を直接解析して取得"""
-  import bs4
-
-  url = f"https://www.boatrace.jp/owpc/pc/race/indexpage?hd={date_str}"
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      )
-  }
-
-  places = {}
-  places_dict = {
-      "桐生": "01",
-      "戸田": "02",
-      "江戸川": "03",
-      "平和島": "04",
-      "多摩川": "05",
-      "浜名湖": "06",
-      "蒲郡": "07",
-      "常滑": "08",
-      "津": "09",
-      "三国": "10",
-      "びわこ": "11",
-      "住之江": "12",
-      "尼崎": "13",
-      "鳴門": "14",
-      "丸亀": "15",
-      "児島": "16",
-      "宮島": "17",
-      "徳山": "18",
-      "下関": "19",
-      "若松": "20",
-      "芦屋": "21",
-      "福岡": "22",
-      "唐津": "23",
-      "大村": "24",
-  }
-
-  try:
-    res = requests.get(url, headers=headers, timeout=5)
-    soup = bs4.BeautifulSoup(res.content, "html.parser")
-
-    # 会場リンクのパース (jcdパラメータが含まれる要素を探す)
-    elements = soup.select('a[href*="jcd="]')
-    for el in elements:
-      href = el.get("href", "")
-      for place_name, jcd in places_dict.items():
-        if f"jcd={jcd}" in href:
-          places[place_name] = jcd
-  except Exception as e:
-    st.error(f"会場データ通信エラー: {e}")
-
-  return places
+def fetch_active_places_cached(target_date_str: str):
+  return get_active_places(target_date_str)
 
 
 # --- ヘッダーエリア ---
 col_title, col_reload = st.columns([4, 1])
+
 with col_title:
   st.title("🚤 MYAI_BOATRACE")
 
@@ -180,13 +111,12 @@ if enable_backtest:
   )
   backtest_date_str = selected_backtest_date.strftime("%Y%m%d")
 
-  # 【重要】選択された日付(backtest_date_str)を明示的に渡して会場取得
   with st.spinner("指定日付の開催会場を取得中..."):
-    bt_active_places = fetch_active_places_by_date(backtest_date_str)
+    bt_active_places = fetch_active_places_cached(backtest_date_str)
 
   if not bt_active_places:
     st.sidebar.error(
-        f"⚠️ {selected_backtest_date.strftime('%Y/%m/%d')} は開催会場データを取得できませんでした。"
+        f"⚠️ {selected_backtest_date.strftime('%Y/%m/%d')} の開催会場データを取得できませんでした。"
     )
   else:
     bt_place_options = list(bt_active_places.keys())
@@ -214,8 +144,7 @@ if enable_backtest:
         odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
             bt_jcd, rno, backtest_date_str
         )
-
-        actual_result = "1-2-3"  # ※実際の着順結果取得処理
+        actual_result = get_race_results(bt_jcd, rno, backtest_date_str)
 
         if df_raw is not None and not df_raw.empty:
           df_features = create_features(df_raw)
@@ -241,14 +170,14 @@ if enable_backtest:
               .tolist()
           )
 
-          is_hit = actual_result in top_preds
+          is_hit = actual_result in top_preds if actual_result else False
           if is_hit:
             hits_count += 1
 
           results.append({
               "レース": f"{rno}R",
               "AI予測上位買い目": ", ".join(top_preds),
-              "実際の結果": actual_result,
+              "実際の結果": actual_result if actual_result else "データ無",
               "判定": "🎯 的中" if is_hit else "❌ 不的中",
           })
         else:
@@ -275,5 +204,72 @@ if enable_backtest:
 
 # リアルタイムモード（本日開催分）
 if not enable_backtest:
-  active_places = fetch_active_places_by_date(date_str)
-  # （以下省略・通常のリアルタイム画面を表示）
+  active_places = fetch_active_places_cached(date_str)
+
+  if not active_places:
+    st.warning("現在開催中の会場がないか、本日のレース日程が終了しています。")
+  else:
+    col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
+    with col_place:
+      selected_place = st.selectbox("開催会場", list(active_places.keys()))
+      jcd = active_places[selected_place]
+
+    purchasable_races = get_purchasable_races(jcd, date_str)
+    with col_race:
+      if not purchasable_races:
+        st.selectbox("対象レース", ["本日全レース終了"], disabled=True)
+        selected_rno = None
+      else:
+        race_options = [f"{r}R" for r in purchasable_races]
+        selected_race_str = st.selectbox("対象レース", race_options)
+        selected_rno = int(selected_race_str.replace("R", ""))
+
+    with col_btn:
+      st.write("")
+      st.write("")
+      submit_btn = st.button(
+          "🎯 決定（予想実行）",
+          type="primary",
+          use_container_width=True,
+          disabled=(selected_rno is None),
+      )
+
+    st.write("---")
+
+    if submit_btn and selected_rno:
+      with st.spinner(f"{selected_place} {selected_rno}R のデータを取得中..."):
+        df_raw = get_race_data(jcd, selected_rno, date_str)
+        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+            jcd, selected_rno, date_str
+        )
+
+        if df_raw is not None and not df_raw.empty:
+          df_features = create_features(df_raw)
+          probs = (
+              model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+              if model
+              else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+          )
+          trifecta_probs = calculate_trifecta_probs(probs)
+
+          predictions = []
+          for combo, ai_prob in trifecta_probs.items():
+            odds = odds_dict.get(combo, 10.0)
+            rank = odds_rank_dict.get(combo, "-")
+            ev = (ai_prob / 100) * odds
+            predictions.append({
+                "買い目": combo,
+                "オッズ": f"{odds:.1f}倍",
+                "人気": f"{rank}人気" if str(rank).isdigit() else "-",
+                "AI予測確率": f"{round(ai_prob, 1)}%",
+                "AI期待値": round(ev, 2),
+            })
+
+          st.subheader(f"🏆 {selected_place} {selected_rno}R AI厳選買い目(上位5点)")
+          st.dataframe(
+              pd.DataFrame(predictions)
+              .sort_values(by="AI期待値", ascending=False)
+              .head(5),
+              hide_index=True,
+              use_container_width=True,
+          )

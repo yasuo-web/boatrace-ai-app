@@ -1,5 +1,6 @@
 from datetime import datetime
 import pickle
+import random
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
@@ -15,10 +16,8 @@ import streamlit as st
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
 
-# --- キャッシュ定義（自動スピナー非表示設定を追加） ---
-@st.cache_data(
-    ttl=3600, show_spinner=False
-)  # show_spinner=False で標準メッセージを非表示化
+# --- キャッシュ定義（自動スピナー非表示設定） ---
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_active_places_cached(date_str: str):
   return get_active_places(date_str)
 
@@ -31,7 +30,6 @@ with col_title:
 
 with col_reload:
   st.write("")  # 垂直位置調整
-  # 手動更新ボタン：キャッシュをクリアして再取得＆再描画
   if st.button("🔄 最新情報に更新", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -100,7 +98,7 @@ def calculate_trifecta_probs(p):
   return trifecta
 
 
-# --- 本日開催会場の動的取得（起動時および手動更新時のみ動作） ---
+# --- 本日開催会場の動的取得 ---
 with st.spinner("現在開催中の会場を取得中..."):
   active_places = fetch_active_places_cached(date_str)
 
@@ -164,15 +162,15 @@ else:
           predictions.append({
               "買い目 (3連単)": combo,
               "AI予測確率 (%)": round(ai_prob, 1),
+              "オッズ_num": odds,
               "オッズ": f"{odds:.1f}倍",
               "AI期待値": round(ev, 2),
           })
 
-        df_top5 = (
-            pd.DataFrame(predictions)
-            .sort_values(by="AI期待値", ascending=False)
-            .head(5)
-        )
+        df_all = pd.DataFrame(predictions)
+
+        # 1. 通常の期待値上位5点
+        df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
 
         st.toast("✅ 予想結果を出力しました！", icon="🎉")
         st.subheader(
@@ -189,4 +187,62 @@ else:
             )
 
         st.write("")
-        st.dataframe(df_top5, hide_index=True, use_container_width=True)
+        st.dataframe(
+            df_top5.drop(columns=["オッズ_num"]),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        st.write("---")
+
+        # 2. オッズ100倍以上の大穴予想（期待値上位1つ、ランダム1つ、理論（確率）上位1つ）
+        st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
+
+        df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
+
+        if df_100plus.empty:
+          st.info("※現在、このレースにはオッズ100倍以上の買い目が存在しません。")
+        else:
+          # ① 期待値最高
+          top_ev_100 = df_100plus.sort_values(
+              by="AI期待値", ascending=False
+          ).iloc[0]
+
+          # ② 理論値最高（AI予測確率が最も高い）
+          top_prob_100 = df_100plus.sort_values(
+              by="AI予測確率 (%)", ascending=False
+          ).iloc[0]
+
+          # ③ 完全ランダム
+          random_100 = df_100plus.sample(n=1).iloc[0]
+
+          cols_hole = st.columns(3)
+
+          with cols_hole[0]:
+            st.metric(
+                label="🔥 高期待値 NO.1",
+                value=top_ev_100["買い目 (3連単)"],
+                delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
+            )
+
+          with cols_hole[1]:
+            st.metric(
+                label="🎲 ランダム一発勝負",
+                value=random_100["買い目 (3連単)"],
+                delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
+            )
+
+          with cols_hole[2]:
+            st.metric(
+                label="🧠 理論勝率 NO.1",
+                value=top_prob_100["買い目 (3連単)"],
+                delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率 (%)']}%",
+            )
+
+          df_hole = (
+              pd.DataFrame([top_ev_100, random_100, top_prob_100])
+              .drop_duplicates(subset=["買い目 (3連単)"])
+              .drop(columns=["オッズ_num"])
+          )
+          st.write("")
+          st.dataframe(df_hole, hide_index=True, use_container_width=True)

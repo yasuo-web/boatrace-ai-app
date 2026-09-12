@@ -13,7 +13,7 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.00", layout="wide")
 
 
 # --- キャッシュ定義（自動スピナー非表示設定） ---
@@ -26,7 +26,12 @@ def fetch_active_places_cached(date_str: str):
 col_title, col_reload = st.columns([4, 1])
 
 with col_title:
-  st.title("🚤 MYAI_BOATRACE")
+  st.markdown(
+      '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
+      '<span style="font-size: 1.2rem; color: #888888; margin-left:'
+      ' 8px;">v1.00</span>',
+      unsafe_allow_html=True,
+  )
 
 with col_reload:
   st.write("")  # 垂直位置調整
@@ -137,6 +142,7 @@ def generate_sample_predictions():
         "AI予測確率": f"{ai_prob}%",
         "AI予測確率_num": ai_prob,
         "AI期待値": ev,
+        "AI期待値_str": f"{ev:.2f}",
     })
   return pd.DataFrame(predictions)
 
@@ -145,7 +151,8 @@ def highlight_high_ev(df):
   """AI期待値が1.0以上の行のスタイルを設定する関数"""
 
   def apply_style(row):
-    if row["AI期待値"] >= 1.0:
+    ev_val = float(row["AI期待値"])
+    if ev_val >= 1.0:
       return [
           "color: #ff4b4b; font-weight: bold;" for _ in range(len(row))
       ]  # 赤字＋太字
@@ -262,6 +269,7 @@ else:
                 "AI予測確率": f"{round(ai_prob, 1)}%",
                 "AI予測確率_num": ai_prob,
                 "AI期待値": round(ev, 2),
+                "AI期待値_str": f"{ev:.2f}",
             })
 
           df_all = pd.DataFrame(predictions)
@@ -283,7 +291,8 @@ else:
           f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
       )
 
-      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
+      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5).copy()
+      df_top5["AI期待値"] = df_top5["AI期待値_str"]
 
       # 期待値1.0以上のハイライトを適用して表示
       st.dataframe(
@@ -316,7 +325,7 @@ else:
           st.metric(
               label="🔥 高期待値 NO.1",
               value=top_ev_100["買い目"],
-              delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
+              delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値_str']}",
           )
 
         with cols_hole[1]:
@@ -330,12 +339,16 @@ else:
           st.metric(
               label="🎲 ランダム一発勝負",
               value=random_100["買い目"],
-              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
+              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値_str']}",
           )
 
-        df_hole = pd.DataFrame([top_ev_100, top_prob_100, random_100]).drop_duplicates(
-            subset=["買い目"]
+        df_hole = (
+            pd.DataFrame([top_ev_100, top_prob_100, random_100])
+            .drop_duplicates(subset=["買い目"])
+            .copy()
         )
+        df_hole["AI期待値"] = df_hole["AI期待値_str"]
+
         st.write("")
         # 期待値1.0以上のハイライトを適用して表示
         st.dataframe(
@@ -354,5 +367,5 @@ else:
       st.markdown(
           "💡 **AI期待値**："
           " (AI予測確率 ÷ 100) ×"
-          " オッズで算出される購入コストに対する回収見込み（1.0以上が買い価値あり）です。"
+          " オッズで算出される購入コストに対する回収見込み（1.00以上が買い価値あり）です。"
       )

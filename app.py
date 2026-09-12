@@ -23,6 +23,35 @@ def fetch_active_places_cached(date_str: str):
   return get_active_places(date_str)
 
 
+# 全会場コードマッピング（変換・表示用）
+ALL_PLACES_DICT = {
+    "桐生": "01",
+    "戸田": "02",
+    "江戸川": "03",
+    "平和島": "04",
+    "多摩川": "05",
+    "浜名湖": "06",
+    "蒲郡": "07",
+    "常滑": "08",
+    "津": "09",
+    "三国": "10",
+    "びわこ": "11",
+    "住之江": "12",
+    "尼崎": "13",
+    "鳴門": "14",
+    "丸亀": "15",
+    "児島": "16",
+    "宮島": "17",
+    "徳山": "18",
+    "下関": "19",
+    "若松": "20",
+    "芦屋": "21",
+    "福岡": "22",
+    "唐津": "23",
+    "大村": "24",
+}
+
+
 # --- ヘッダーエリア ---
 col_title, col_reload = st.columns([4, 1])
 
@@ -155,119 +184,99 @@ if enable_backtest:
   )
   backtest_date_str = selected_backtest_date.strftime("%Y%m%d")
 
-  # 会場リスト（主要場または選択用）
-  places_dict = {
-      "桐生": "01",
-      "戸田": "02",
-      "江戸川": "03",
-      "平和島": "04",
-      "多摩川": "05",
-      "浜名湖": "06",
-      "蒲郡": "07",
-      "常滑": "08",
-      "津": "09",
-      "三国": "10",
-      "びわこ": "11",
-      "住之江": "12",
-      "尼崎": "13",
-      "鳴門": "14",
-      "丸亀": "15",
-      "児島": "16",
-      "宮島": "17",
-      "徳山": "18",
-      "下関": "19",
-      "若松": "20",
-      "芦屋": "21",
-      "福岡": "22",
-      "唐津": "23",
-      "大村": "24",
-  }
+  # 指定された過去日付に実際に開催があった会場リストを動的取得
+  bt_active_places = fetch_active_places_cached(backtest_date_str)
 
-  selected_bt_place = st.sidebar.selectbox(
-      "検証会場", list(places_dict.keys()), index=11
-  )  # 初期選択: 住之江
-  bt_jcd = places_dict[selected_bt_place]
+  if not bt_active_places:
+    st.sidebar.error("⚠️ 指定された日付には開催会場のデータがありません。")
+  else:
+    bt_place_options = list(bt_active_places.keys())
+    selected_bt_place = st.sidebar.selectbox(
+        "検証会場（指定日の開催場のみ）", bt_place_options
+    )
+    bt_jcd = bt_active_places[selected_bt_place]
 
-  top_n_choice = st.sidebar.slider(
-      "AI期待値 上位何点を購入するか", 1, 10, 5
-  )
-
-  if st.sidebar.button("🚀 過去全12レースの検証実行", type="primary"):
-    st.subheader(
-        f"📊 {selected_backtest_date.strftime('%Y年%m月%d日')} {selected_bt_place} 全レース検証結果"
+    top_n_choice = st.sidebar.slider(
+        "AI期待値 上位何点を購入するか", 1, 10, 5
     )
 
-    results = []
-    hits_count = 0
-    total_races = 12
-
-    progress_bar = st.progress(0)
-
-    for rno in range(1, 13):
-      # 1. 過去レースデータ＆オッズの取得
-      df_raw = get_race_data(bt_jcd, rno, backtest_date_str)
-      odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
-          bt_jcd, rno, backtest_date_str
+    if st.sidebar.button("🚀 過去全12レースの検証実行", type="primary"):
+      st.subheader(
+          f"📊 {selected_backtest_date.strftime('%Y年%m月%d日')} {selected_bt_place} 全レース検証結果"
       )
 
-      # ※サンプル用ダミー判定処理（実環境では scraper から get_race_results 等で結果を取得）
-      # 実際の結果を取得する想定
-      actual_result = "1-2-3"  # 例: 1着-2着-3着
+      results = []
+      hits_count = 0
+      total_races = 12
 
-      if df_raw is not None and not df_raw.empty:
-        df_features = create_features(df_raw)
-        probs = (
-            model.predict_proba(df_features[FEATURE_COLS])[:, 1]
-            if model
-            else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+      progress_bar = st.progress(0)
+
+      for rno in range(1, 13):
+        # 1. 過去レースデータ＆オッズの取得
+        df_raw = get_race_data(bt_jcd, rno, backtest_date_str)
+        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+            bt_jcd, rno, backtest_date_str
         )
-        trifecta_probs = calculate_trifecta_probs(probs)
 
-        predictions = []
-        for combo, ai_prob in trifecta_probs.items():
-          odds = odds_dict.get(combo, 10.0)
-          ev = (ai_prob / 100) * odds
-          predictions.append(
-              {"買い目": combo, "オッズ": odds, "AI期待値": ev}
+        # 実際の結果を取得する想定（※スクレイパー連携）
+        actual_result = "1-2-3"  # 例: 1着-2着-3着
+
+        if df_raw is not None and not df_raw.empty:
+          df_features = create_features(df_raw)
+          probs = (
+              model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+              if model
+              else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+          )
+          trifecta_probs = calculate_trifecta_probs(probs)
+
+          predictions = []
+          for combo, ai_prob in trifecta_probs.items():
+            odds = odds_dict.get(combo, 10.0)
+            ev = (ai_prob / 100) * odds
+            predictions.append(
+                {"買い目": combo, "オッズ": odds, "AI期待値": ev}
+            )
+
+          df_pred = pd.DataFrame(predictions)
+          top_preds = (
+              df_pred.sort_values(by="AI期待値", ascending=False)
+              .head(top_n_choice)["買い目"]
+              .tolist()
           )
 
-        df_pred = pd.DataFrame(predictions)
-        top_preds = (
-            df_pred.sort_values(by="AI期待値", ascending=False)
-            .head(top_n_choice)["買い目"]
-            .tolist()
-        )
+          is_hit = actual_result in top_preds
+          if is_hit:
+            hits_count += 1
 
-        is_hit = actual_result in top_preds
-        if is_hit:
-          hits_count += 1
+          results.append({
+              "レース": f"{rno}R",
+              "AI予測上位買い目": ", ".join(top_preds),
+              "実際の結果": actual_result,
+              "判定": "🎯 的中" if is_hit else "❌ 不的中",
+          })
+        else:
+          results.append({
+              "レース": f"{rno}R",
+              "AI予測上位買い目": "データなし",
+              "実際の結果": "-",
+              "判定": "中止/データ無",
+          })
 
-        results.append({
-            "レース": f"{rno}R",
-            "AI予測上位買い目": ", ".join(top_preds),
-            "実際の結果": actual_result,
-            "判定": "🎯 的中" if is_hit else "❌ 不的中",
-        })
-      else:
-        results.append({
-            "レース": f"{rno}R",
-            "AI予測上位買い目": "データなし",
-            "実際の結果": "-",
-            "判定": "中止/データ無",
-        })
+        progress_bar.progress(rno / 12)
 
-      progress_bar.progress(rno / 12)
+      hit_rate = (hits_count / total_races) * 100
 
-    hit_rate = (hits_count / total_races) * 100
+      # 結果サマリー表示
+      col_m1, col_m2, col_m3 = st.columns(3)
+      col_m1.metric("対象レース数", f"{total_races} レース")
+      col_m2.metric("的中数", f"{hits_count} レース")
+      col_m3.metric("的中率", f"{hit_rate:.1f} %")
 
-    # 結果サマリー表示
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("対象レース数", f"{total_races} レース")
-    col_m2.metric("的中数", f"{hits_count} レース")
-    col_m3.metric("的中率", f"{hit_rate:.1f} %")
-
-    st.dataframe(pd.DataFrame(results), hide_index=True, use_container_width=True)
-    st.write("---")
+      st.dataframe(
+          pd.DataFrame(results), hide_index=True, use_container_width=True
+      )
+      st.write("---")
 
 # --- 本日開催会場の動的取得 (リアルタイムモード) ---
 if not enable_backtest:

@@ -1,106 +1,157 @@
-import json
-import os
+from datetime import datetime
+import pickle
+import numpy as np
 import pandas as pd
+from scraper import create_features, get_odds_data, get_race_data
 import streamlit as st
 
-# ブラウザタブのタイトル設定
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
+st.title("🚤 MYAI_BOATRACE")
+
+JCD_MAP = {
+    "桐生": "01",
+    "戸田": "02",
+    "江戸川": "03",
+    "平和島": "04",
+    "多摩川": "05",
+    "浜名湖": "06",
+    "蒲郡": "07",
+    "常滑": "08",
+    "津": "09",
+    "三国": "10",
+    "びわこ": "11",
+    "住之江": "12",
+    "尼崎": "13",
+    "鳴門": "14",
+    "丸亀": "15",
+    "児島": "16",
+    "宮島": "17",
+    "徳山": "18",
+    "下関": "19",
+    "若松": "20",
+    "芦屋": "21",
+    "福岡": "22",
+    "唐津": "23",
+    "大村": "24",
+}
+
+FEATURE_COLS = [
+    "boat_number",
+    "rank_score",
+    "national_win_rate",
+    "local_win_rate",
+    "motor_2in_rate",
+    "exhibit_time",
+    "f_count",
+    "avg_st",
+    "entry_course",
+    "is_course_1",
+    "course_changed",
+    "ex_time_rel",
+    "st_rel",
+    "kadomakuri_threat",
+    "outer_follow_advantage",
+]
 
 
-# キャッシュクリアと通知フラグの設定
-def refresh_data():
-  st.cache_data.clear()
-  st.session_state["show_toast"] = True
+@st.cache_resource
+def load_model():
+  with open("boat_model.pkl", "rb") as f:
+    return pickle.load(f)
 
 
-# ヘッダーエリア（タイトルと更新ボタン）
-col_title, col_btn = st.columns([4, 1])
-with col_title:
-  st.title("🚤 MYAI_BOATRACE")
-with col_btn:
-  st.write("")  # レイアウト調整用
-  if st.button("🔄 データを最新に更新", on_click=refresh_data):
-    st.rerun()
-
-# 更新完了時のポップアップ通知（画面右下に約3秒表示されて自動消滅）
-if st.session_state.get("show_toast", False):
-  st.toast("✅ データを最新に更新しました！", icon="🎉")
-  st.session_state["show_toast"] = False  # 次回描画時に再表示されないようリセット
+model = load_model()
 
 
-@st.cache_data(ttl=600)
-def load_predictions():
-  if not os.path.exists("latest_predictions.json"):
-    return None
-  with open("latest_predictions.json", "r", encoding="utf-8") as f:
-    return json.load(f)
+def calculate_trifecta_probs(p):
+  """全120通りの3連単確率を計算"""
+  p = np.array(p)
+  p = p / np.sum(p)
+  n = len(p)
+  trifecta = {}
+
+  for i in range(n):
+    for j in range(n):
+      if i == j:
+        continue
+      p_i_j = p[i] * (p[j] / (1 - p[i]))
+      for k in range(n):
+        if k == i or k == j:
+          continue
+        p_i_j_k = p_i_j * (p[k] / (1 - p[i] - p[j]))
+        combo = f"{i+1}-{j+1}-{k+1}"
+        trifecta[combo] = p_i_j_k * 100
+
+  return trifecta
 
 
-pred_data = load_predictions()
+# --- サイドバー操作部 ---
+st.sidebar.header("📌 レース条件指定")
+selected_place = st.sidebar.selectbox("開催会場", list(JCD_MAP.keys()))
+selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
+selected_date = st.sidebar.date_input("日付", datetime.now())
 
-if pred_data is None:
-  st.warning(
-      "現在予測データがありません。GitHub Actionsの実行をお待ちください。"
-  )
-else:
-  st.caption(f"最終更新日時: {pred_data.get('updated_at')}")
+date_str = selected_date.strftime("%Y%m%d")
+jcd = JCD_MAP[selected_place]
 
-  places_data = pred_data.get("data", {})
-  place_options = {
-      v["place_name"]: k
-      for k, v in places_data.items()
-      if len(v.get("races", {})) > 0
-  }
+# 「決定」ボタンの配置
+submit_btn = st.sidebar.button("🎯 決定（予想実行）", type="primary")
 
-  if not place_options:
-    st.info("本日の開催レースデータはまだ更新されていません。")
-  else:
-    st.sidebar.header("📌 レース選択")
+if submit_btn:
+  with st.spinner(
+      f"{selected_place} {selected_rno}R の最新データ・オッズを取得中..."
+  ):
+    # 1. データ取得
+    df_raw = get_race_data(jcd, selected_rno, date_str)
+    odds_dict = get_odds_data(jcd, selected_rno, date_str)
 
-    # サイドバー側の更新ボタン
-    if st.sidebar.button(
-        "🔄 予想データを再取得",
-        key="sidebar_refresh",
-        on_click=refresh_data,
-    ):
-      st.rerun()
-
-    selected_place_name = st.sidebar.selectbox(
-        "開催場", list(place_options.keys())
-    )
-    selected_jcd = place_options[selected_place_name]
-
-    races_available = places_data[selected_jcd]["races"]
-    selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
-
-    rno_str = str(selected_rno)
-
-    if rno_str in races_available:
-      race_info = races_available[rno_str]
-      rank_preds = race_info["ranks"]
-      trifecta_preds = race_info["trifecta"]
-
-      # 表データの作成
-      df_result = pd.DataFrame(rank_preds)
-      df_result["boat"] = df_result["boat"].apply(lambda x: f"{x}号艇")
-      df_result.columns = [
-          "艇番",
-          "1着確率 (%)",
-          "2着確率 (%)",
-          "3着確率 (%)",
-      ]
-
-      st.subheader(f"🎯 {selected_place_name} {selected_rno}R 着順予測")
-      st.dataframe(df_result, hide_index=True, use_container_width=True)
-
-      # 3連単おすすめ買い目の表示
-      st.subheader("💡 AI推奨 3連単買い目（上位5点）")
-      cols = st.columns(5)
-      for idx, (combo, prob) in enumerate(trifecta_preds):
-        with cols[idx]:
-          st.metric(label=f"第{idx+1}予想", value=combo, delta=f"{prob}%")
-
-    else:
-      st.warning(
-          f"{selected_place_name} {selected_rno}R の予測データはありません。"
+    if df_raw is None or df_raw.empty:
+      st.error(
+          "レースデータの取得に失敗しました。開催日またはレース番号を確認してください。"
       )
+    else:
+      # 2. AI確率計算
+      df_features = create_features(df_raw)
+      probs = model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+      trifecta_probs = calculate_trifecta_probs(probs)
+
+      # 3. オッズ情報と結合して「期待値」を算出
+      predictions = []
+      for combo, ai_prob in trifecta_probs.items():
+        odds = odds_dict.get(combo, 10.0)  # オッズ未取得時は10.0倍仮定
+        ev = (ai_prob / 100) * odds  # 期待値 = AI確率 × オッズ
+
+        predictions.append({
+            "買い目 (3連単)": combo,
+            "AI予測確率 (%)": round(ai_prob, 1),
+            "オッズ": f"{odds:.1f}倍",
+            "AI期待値": round(ev, 2),
+        })
+
+      # 4. 期待値の高い順にソートし、上位5点のみを抽出
+      df_top5 = (
+          pd.DataFrame(predictions)
+          .sort_values(by="AI期待値", ascending=False)
+          .head(5)
+      )
+
+      # 5. 結果表示
+      st.toast("✅ 予想結果を出力しました！", icon="🎉")
+      st.subheader(
+          f"🏆 {selected_place} {selected_rno}R AI厳選買い目（上位5点）"
+      )
+      st.caption("※ AI確率とリアルタイムオッズから算出した期待値の上位5点です")
+
+      # テーブル形式で綺麗に表示
+      st.dataframe(df_top5, hide_index=True, use_container_width=True)
+
+      # メトリック（強調表示）
+      st.write("---")
+      cols = st.columns(5)
+      for idx, (_, row) in enumerate(df_top5.iterrows()):
+        with cols[idx]:
+          st.metric(
+              label=f"第{idx+1}推奨",
+              value=row["買い目 (3連単)"],
+              delta=f"{row['オッズ']} / 期待値:{row['AI期待値']}",
+          )

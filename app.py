@@ -114,7 +114,7 @@ def generate_sample_predictions():
         combos.append(f"{i}-{j}-{k}")
 
   predictions = []
-  for combo in combos:
+  for idx, combo in enumerate(combos):
     if combo.startswith("1-"):
       ai_prob = round(random.uniform(2.0, 15.0), 1)
       odds = round(random.uniform(6.0, 45.0), 1)
@@ -126,11 +126,15 @@ def generate_sample_predictions():
       odds = round(random.uniform(100.0, 450.0), 1)
 
     ev = round((ai_prob / 100) * odds, 2)
+    t3_odds = round(odds * random.uniform(0.15, 0.35), 1)
+
     predictions.append({
-        "買い目 (3連単)": combo,
-        "AI予測確率 (%)": ai_prob,
+        "買い目(3連単)": combo,
         "オッズ_num": odds,
-        "オッズ": f"{odds:.1f}倍",
+        "オッズ(3連単)": f"{odds:.1f}倍",
+        "人気(３連単)": f"{idx + 1}人気",
+        "オッズ(3連複)": f"{t3_odds:.1f}倍",
+        "AI予測確率(%)": ai_prob,
         "AI期待値": ev,
     })
   return pd.DataFrame(predictions)
@@ -206,7 +210,9 @@ else:
           f"{display_place_name} {display_race_no}R の最新データ・オッズを取得中..."
       ):
         df_raw = get_race_data(jcd, display_race_no, date_str)
-        odds_dict = get_odds_data(jcd, display_race_no, date_str)
+        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+            jcd, display_race_no, date_str
+        )
 
         if df_raw is None or df_raw.empty:
           st.error(
@@ -225,46 +231,65 @@ else:
           predictions = []
           for combo, ai_prob in trifecta_probs.items():
             odds = odds_dict.get(combo, 10.0)
+            rank = odds_rank_dict.get(combo, "-")
+            
+            # 3連複オッズの参照（組み合わせソート）
+            trio_key = "-".join(sorted(combo.split("-")))
+            trio_odds = trio_odds_dict.get(trio_key, 0.0)
+
             ev = (ai_prob / 100) * odds
 
             predictions.append({
-                "買い目 (3連単)": combo,
-                "AI予測確率 (%)": round(ai_prob, 1),
+                "買い目(3連単)": combo,
                 "オッズ_num": odds,
-                "オッズ": f"{odds:.1f}倍",
+                "オッズ(3連単)": f"{odds:.1f}倍",
+                "人気(３連単)": f"{rank}人気" if str(rank).isdigit() else "-",
+                "オッズ(3連複)": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
+                "AI予測確率(%)": round(ai_prob, 1),
                 "AI期待値": round(ev, 2),
             })
 
           df_all = pd.DataFrame(predictions)
 
     if df_all is not None:
-      # 1. 通常の期待値上位5点
-      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
-
       st.toast("✅ 予想結果を出力しました！", icon="🎉")
+
+      # 1. AI厳選買い目（上位5点表表示）
       st.subheader(
-          f"🏆 {display_place_name} {display_race_no}R AI厳選買い目（上位5点）"
+          f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
       )
 
-      cols = st.columns(5)
-      for idx, (_, row) in enumerate(df_top5.iterrows()):
-        with cols[idx]:
-          st.metric(
-              label=f"第{idx+1}推奨",
-              value=row["買い目 (3連単)"],
-              delta=f"{row['オッズ']} / 期待値:{row['AI期待値']}",
-          )
+      cols_order = [
+          "買い目(3連単)",
+          "オッズ(3连単)",
+          "人気(３連単)",
+          "オッズ(3連複)",
+          "AI予測確率(%)",
+          "AI期待値",
+      ]
+      
+      # 互換性のためのカラム名調整
+      df_all_display = df_all.rename(columns={"オッズ(3連単)": "オッズ(3連単)"})
+      df_top5 = df_all_display.sort_values(by="AI期待値", ascending=False).head(5)
 
-      st.write("")
       st.dataframe(
-          df_top5.drop(columns=["オッズ_num"]),
+          df_top5[
+              [
+                  "買い目(3連単)",
+                  "オッズ(3連単)",
+                  "人気(３連単)",
+                  "オッズ(3連複)",
+                  "AI予測確率(%)",
+                  "AI期待値",
+              ]
+          ],
           hide_index=True,
           use_container_width=True,
       )
 
       st.write("---")
 
-      # 2. オッズ100倍以上の大穴予想（期待値上位1つ、ランダム1つ、理論（確率）上位1つ）
+      # 2. オッズ100倍以上の大穴予想（従来形式を保持）
       st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
 
       df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
@@ -272,17 +297,12 @@ else:
       if df_100plus.empty:
         st.info("※現在、このレースにはオッズ100倍以上の買い目が存在しません。")
       else:
-        # ① 期待値最高
         top_ev_100 = df_100plus.sort_values(
             by="AI期待値", ascending=False
         ).iloc[0]
-
-        # ② 理論値最高（AI予測確率が最も高い）
         top_prob_100 = df_100plus.sort_values(
-            by="AI予測確率 (%)", ascending=False
+            by="AI予測確率(%)", ascending=False
         ).iloc[0]
-
-        # ③ 完全ランダム
         random_100 = df_100plus.sample(n=1).iloc[0]
 
         cols_hole = st.columns(3)
@@ -290,28 +310,54 @@ else:
         with cols_hole[0]:
           st.metric(
               label="🔥 高期待値 NO.1",
-              value=top_ev_100["買い目 (3連単)"],
-              delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
+              value=top_ev_100["買い目(3連単)"],
+              delta=f"{top_ev_100['オッズ(3連単)']} / 期待値:{top_ev_100['AI期待値']}",
           )
 
         with cols_hole[1]:
           st.metric(
               label="🎲 ランダム一発勝負",
-              value=random_100["買い目 (3連単)"],
-              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
+              value=random_100["買い目(3連単)"],
+              delta=f"{random_100['オッズ(3連単)']} / 期待値:{random_100['AI期待値']}",
           )
 
         with cols_hole[2]:
           st.metric(
               label="🧠 理論勝率 NO.1",
-              value=top_prob_100["買い目 (3連単)"],
-              delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率 (%)']}%",
+              value=top_prob_100["買い目(3連単)"],
+              delta=f"{top_prob_100['オッズ(3連単)']} / 確率:{top_prob_100['AI予測確率(%)']}%",
           )
 
         df_hole = (
             pd.DataFrame([top_ev_100, random_100, top_prob_100])
-            .drop_duplicates(subset=["買い目 (3連単)"])
+            .drop_duplicates(subset=["買い目(3连単)"])
             .drop(columns=["オッズ_num"])
         )
         st.write("")
-        st.dataframe(df_hole, hide_index=True, use_container_width=True)
+        st.dataframe(
+            df_hole[
+                [
+                    "買い目(3連単)",
+                    "オッズ(3連単)",
+                    "人気(３連単)",
+                    "オッズ(3連複)",
+                    "AI予測確率(%)",
+                    "AI期待値",
+                ]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+      st.write("---")
+
+      # 一番下部に指標の解説文を追加
+      st.markdown(
+          "💡 **AI予測確率(%)**："
+          " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
+      )
+      st.markdown(
+          "💡 **AI期待値**："
+          " (AI予測確率 ÷ 100) ×"
+          " オッズで算出される購入コストに対する回収見込み（1.0以上が買い価値あり）です。"
+      )

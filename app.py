@@ -1,96 +1,69 @@
-import pickle
-import numpy as np
+from datetime import datetime
+import json
+import os
 import pandas as pd
-from scraper import create_features, get_race_data
 import streamlit as st
 
-st.set_page_config(page_title="AI競艇予想 Webアプリ", layout="wide")
-st.title("🚤 AI競艇予想 Webアプリ（特徴量拡張版）")
+st.set_page_config(
+    page_title="AI競艇予想 Webアプリ (全自動更新版)", layout="wide"
+)
+st.title("🚤 AI競艇予想 Webアプリ（自動更新版）")
 
 
-@st.cache_resource
-def load_model():
-  with open("boat_model.pkl", "rb") as f:
-    return pickle.load(f)
+# JSONデータの読み込み
+@st.cache_data(ttl=600)  # 10分キャッシュ
+def load_predictions():
+  if not os.path.exists("latest_predictions.json"):
+    return None
+  with open("latest_predictions.json", "r", encoding="utf-8") as f:
+    return json.load(f)
 
 
-model = load_model()
+pred_data = load_predictions()
 
-JCD_MAP = {
-    "桐生": "01",
-    "戸田": "02",
-    "江戸川": "03",
-    "平和島": "04",
-    "多摩川": "05",
-    "浜名湖": "06",
-    "蒲郡": "07",
-    "常滑": "08",
-    "津": "09",
-    "三国": "10",
-    "びわこ": "11",
-    "住之江": "12",
-    "尼崎": "13",
-    "鳴門": "14",
-    "丸亀": "15",
-    "児島": "16",
-    "宮島": "17",
-    "徳山": "18",
-    "下関": "19",
-    "若松": "20",
-    "芦屋": "21",
-    "福岡": "22",
-    "唐津": "23",
-    "大村": "24",
-}
-
-st.sidebar.header("📌 レース選択")
-selected_place = st.sidebar.selectbox("開催場", list(JCD_MAP.keys()))
-selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
-selected_date = st.sidebar.date_input("日付")
-
-date_str = selected_date.strftime("%Y%m%d")
-jcd = JCD_MAP[selected_place]
-
-if st.sidebar.button("出走表を自動取得"):
-  with st.spinner("BOAT RACE公式サイトからデータ取得中..."):
-    df_fetched = get_race_data(jcd, selected_rno, date_str)
-    if df_fetched is not None and not df_fetched.empty:
-      st.session_state["race_df"] = df_fetched
-      st.success("取得完了しました！")
-    else:
-      st.error("データの取得に失敗しました。")
-
-if "race_df" in st.session_state:
-  df_raw = st.session_state["race_df"]
-  st.subheader(
-      f"📋 {selected_place} {selected_rno}R 出走表データ（生データ）"
+if pred_data is None:
+  st.warning(
+      "現在予測データがありません。GitHub Actionsの初回実行をお待ちください。"
   )
-  st.dataframe(df_raw, use_container_width=True)
+else:
+  st.caption(f"最終更新日: {pred_data.get('updated_at')}")
 
-  if st.button("AIで勝率を予想する", type="primary"):
-    # 推論直前に特徴量生成エンジンを通す
-    df_features = create_features(df_raw)
+  places_data = pred_data.get("data", {})
+  place_options = {
+      v["place_name"]: k
+      for k, v in places_data.items()
+      if len(v["races"]) > 0
+  }
 
-    feature_cols = [
-        "boat_number",
-        "national_win_rate",
-        "local_win_rate",
-        "motor_2in_rate",
-        "exhibit_time",
-        "is_boat_1",
-        "has_flying",
-        "boat1_and_flying",
-        "ex_time_rel",
-        "st_rel",
-    ]
+  if not place_options:
+    st.info("本日の開催レースデータはまだ更新されていません。")
+  else:
+    st.sidebar.header("📌 レース選択")
+    selected_place_name = st.sidebar.selectbox(
+        "開催場", list(place_options.keys())
+    )
+    selected_jcd = place_options[selected_place_name]
 
-    probs = model.predict_proba(df_features[feature_cols])[:, 1]
-    norm_probs = (probs / np.sum(probs)) * 100
+    races_available = places_data[selected_jcd]["races"]
+    selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
 
-    df_result = pd.DataFrame({
-        "艇番": [f"{i}号艇" for i in range(1, 7)],
-        "予想勝利確率 (%)": np.round(norm_probs, 1),
-    }).sort_values(by="予想勝利確率 (%)", ascending=False)
+    rno_str = str(selected_rno)
 
-    st.subheader("🎯 予想結果")
-    st.dataframe(df_result, hide_index=True, use_container_width=True)
+    if rno_str in races_available:
+      race_preds = races_available[rno_str]
+
+      df_result = pd.DataFrame(race_preds)
+      df_result.columns = ["艇番", "予想勝利確率 (%)"]
+      df_result["艇番"] = df_result["艇番"].apply(lambda x: f"{x}号艇")
+
+      st.subheader(f"🎯 {selected_place_name} {selected_rno}R 予想結果")
+      st.dataframe(df_result, hide_index=True, use_container_width=True)
+
+      # 本命・対抗の強調表示
+      top1 = df_result.iloc[0]["艇番"]
+      top2 = df_result.iloc[1]["艇番"]
+      st.success(f"**本命 (◎):** {top1} | **対抗 (○):** {top2}")
+    else:
+      st.warning(
+          f"{selected_place_name} {selected_rno}R の予測データはありません。"
+      )

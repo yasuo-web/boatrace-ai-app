@@ -15,8 +15,10 @@ import streamlit as st
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
 
-# --- キャッシュ定義（アプリ起動時 / クリア時のみ実行） ---
-@st.cache_data(ttl=3600)  # 基本はキャッシュを利用
+# --- キャッシュ定義（自動スピナー非表示設定を追加） ---
+@st.cache_data(
+    ttl=3600, show_spinner=False
+)  # show_spinner=False で標準メッセージを非表示化
 def fetch_active_places_cached(date_str: str):
   return get_active_places(date_str)
 

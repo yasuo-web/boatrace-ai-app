@@ -6,6 +6,8 @@ from scraper import create_features, get_odds_data, get_race_data
 import streamlit as st
 
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
+
+# ヘッダーエリア
 st.title("🚤 MYAI_BOATRACE")
 
 JCD_MAP = {
@@ -85,19 +87,42 @@ def calculate_trifecta_probs(p):
   return trifecta
 
 
-# --- サイドバー操作部 ---
-st.sidebar.header("📌 レース条件指定")
-selected_place = st.sidebar.selectbox("開催会場", list(JCD_MAP.keys()))
-selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
-selected_date = st.sidebar.date_input("日付", datetime.now())
+# --- タイトル直下の操作エリア ---
+st.write("---")
 
-date_str = selected_date.strftime("%Y%m%d")
+# 4列レイアウト（開催会場 / レース番号 / ボタン / 余白調整）
+col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
+
+with col_place:
+  selected_place = st.selectbox("開催会場", list(JCD_MAP.keys()))
+
+with col_race:
+  # 1R〜12Rのプルダウン選択式
+  race_options = [f"{i}R" for i in range(1, 13)]
+  selected_race_str = st.selectbox("対象レース", race_options)
+  selected_rno = int(selected_race_str.replace("R", ""))
+
+with col_btn:
+  st.write("")  # 高さ（ラベル分）の調整
+  st.write("")
+  submit_btn = st.button(
+      "🎯 決定（予想実行）", type="primary", use_container_width=True
+  )
+
+st.write("---")
+
+# 日付はアプリ起動日の当日（YYYYMMDD形式）に固定
+today_dt = datetime.now()
+date_str = today_dt.strftime("%Y%m%d")
 jcd = JCD_MAP[selected_place]
 
-# 「決定」ボタンの配置
-submit_btn = st.sidebar.button("🎯 決定（予想実行）", type="primary")
-
+# 決定ボタンが押された時の処理
 if submit_btn:
+  st.caption(
+      f"対象日: {today_dt.strftime('%Y年%m月%d日')} | 会場: {selected_place} |"
+      f" レース: {selected_rno}R"
+  )
+
   with st.spinner(
       f"{selected_place} {selected_rno}R の最新データ・オッズを取得中..."
   ):
@@ -107,7 +132,7 @@ if submit_btn:
 
     if df_raw is None or df_raw.empty:
       st.error(
-          "レースデータの取得に失敗しました。開催日またはレース番号を確認してください。"
+          "レースデータの取得に失敗しました。本日開催されていないか、データがまだ更新されていない可能性があります。"
       )
     else:
       # 2. AI確率計算
@@ -140,13 +165,8 @@ if submit_btn:
       st.subheader(
           f"🏆 {selected_place} {selected_rno}R AI厳選買い目（上位5点）"
       )
-      st.caption("※ AI確率とリアルタイムオッズから算出した期待値の上位5点です")
 
-      # テーブル形式で綺麗に表示
-      st.dataframe(df_top5, hide_index=True, use_container_width=True)
-
-      # メトリック（強調表示）
-      st.write("---")
+      # 強調カード表示（上段）
       cols = st.columns(5)
       for idx, (_, row) in enumerate(df_top5.iterrows()):
         with cols[idx]:
@@ -155,3 +175,8 @@ if submit_btn:
               value=row["買い目 (3連単)"],
               delta=f"{row['オッズ']} / 期待値:{row['AI期待値']}",
           )
+
+      st.write("")
+
+      # テーブル表示（下段）
+      st.dataframe(df_top5, hide_index=True, use_container_width=True)

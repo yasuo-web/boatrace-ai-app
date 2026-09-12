@@ -6,15 +6,26 @@ import streamlit as st
 # ブラウザタブのタイトル設定
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
+
+# キャッシュクリアと通知フラグの設定
+def refresh_data():
+  st.cache_data.clear()
+  st.session_state["show_toast"] = True
+
+
 # ヘッダーエリア（タイトルと更新ボタン）
 col_title, col_btn = st.columns([4, 1])
 with col_title:
   st.title("🚤 MYAI_BOATRACE")
 with col_btn:
   st.write("")  # レイアウト調整用
-  if st.button("🔄 データを最新に更新"):
-    st.cache_data.clear()  # キャッシュをクリア
-    st.rerun()  # 画面を再描画
+  if st.button("🔄 データを最新に更新", on_click=refresh_data):
+    st.rerun()
+
+# 更新完了時のポップアップ通知（画面右下に約3秒表示されて自動消滅）
+if st.session_state.get("show_toast", False):
+  st.toast("✅ データを最新に更新しました！", icon="🎉")
+  st.session_state["show_toast"] = False  # 次回描画時に再表示されないようリセット
 
 
 @st.cache_data(ttl=600)
@@ -46,9 +57,12 @@ else:
   else:
     st.sidebar.header("📌 レース選択")
 
-    # サイドバーにも更新ボタンを配置
-    if st.sidebar.button("🔄 予想データを再取得"):
-      st.cache_data.clear()
+    # サイドバー側の更新ボタン
+    if st.sidebar.button(
+        "🔄 予想データを再取得",
+        key="sidebar_refresh",
+        on_click=refresh_data,
+    ):
       st.rerun()
 
     selected_place_name = st.sidebar.selectbox(

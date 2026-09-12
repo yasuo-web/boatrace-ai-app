@@ -14,8 +14,17 @@ import streamlit as st
 
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
-# ヘッダーエリア
-st.title("🚤 MYAI_BOATRACE")
+# --- ヘッダーエリア ---
+col_title, col_reload = st.columns([4, 1])
+
+with col_title:
+  st.title("🚤 MYAI_BOATRACE")
+
+with col_reload:
+  st.write("")  # 垂直位置の微調整
+  # 手動更新ボタン（クリックでキャッシュクリア＆画面リロード）
+  if st.button("🔄 最新情報に更新", use_container_width=True):
+    st.rerun()
 
 # 日本時間（Asia/Tokyo）の取得と表示フォーマット設定
 jst = ZoneInfo("Asia/Tokyo")

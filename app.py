@@ -1,5 +1,6 @@
 from datetime import datetime
 import pickle
+from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from scraper import (
@@ -16,15 +17,16 @@ st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 # ヘッダーエリア
 st.title("🚤 MYAI_BOATRACE")
 
-# 本日日付と時刻の表示設定
-WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
-today_dt = datetime.now()
-date_str = today_dt.strftime("%Y%m%d")
+# 日本時間（Asia/Tokyo）の取得と表示フォーマット設定
+jst = ZoneInfo("Asia/Tokyo")
+now_jst = datetime.now(jst)
+date_str = now_jst.strftime("%Y%m%d")
 
-weekday_str = WEEKDAYS_JP[today_dt.weekday()]
+WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
+weekday_str = WEEKDAYS_JP[now_jst.weekday()]
 formatted_datetime = (
-    f"{today_dt.strftime('%Y年%m月%d日')} ({weekday_str}) "
-    f"{today_dt.strftime('%H:%M')}"
+    f"{now_jst.strftime('%Y年%m月%d日')} ({weekday_str}) "
+    f"{now_jst.strftime('%H:%M')}"
 )
 
 st.caption(formatted_datetime)

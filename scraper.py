@@ -1,6 +1,7 @@
 from datetime import datetime
 import re
 import time
+from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import pandas as pd
 import requests
@@ -63,7 +64,7 @@ def get_active_places(date_str: str) -> dict:
 
 
 def get_purchasable_races(jcd: str, date_str: str) -> list:
-  """指定会場の「現在時刻より締切が未来のレース（購入可能）」リストを取得"""
+  """指定会場の「日本時間の現在時刻より締切が未来のレース（購入可能）」リストを取得"""
   url = f"https://www.boatrace.jp/owpc/pc/race/raceindex?jcd={jcd}&hd={date_str}"
   headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
@@ -75,7 +76,10 @@ def get_purchasable_races(jcd: str, date_str: str) -> list:
       return [i for i in range(1, 13)]
 
     soup = BeautifulSoup(res.text, "html.parser")
-    now = datetime.now()
+
+    # 日本時間 (Asia/Tokyo) の現在時刻を取得し、比較用にタイムゾーン情報を除去
+    jst = ZoneInfo("Asia/Tokyo")
+    now_jst = datetime.now(jst).replace(tzinfo=None)
 
     tables = soup.find_all("table", class_="is-w780")
     for table in tables:
@@ -89,7 +93,8 @@ def get_purchasable_races(jcd: str, date_str: str) -> list:
             limit_time = datetime.strptime(
                 f"{date_str} {time_str}", "%Y%m%d %H:%M"
             )
-            if now < limit_time:
+            # 日本時間で比較判定
+            if now_jst < limit_time:
               if rno not in purchasable_races:
                 purchasable_races.append(rno)
           except Exception:

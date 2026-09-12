@@ -1,0 +1,50 @@
+# 1. ワークフローの名前（GitHubの画面上に表示されます）
+name: Daily BoatRace Prediction
+
+# 2. 実行するタイミング（トリガー）の指定
+on:
+  schedule:
+    # 毎日 日本時間 午前8:00（UTC 23:00）に自動実行
+    - cron: '0 23 * * *'
+  # GitHubのWeb画面から手動で実行できるボタンを有効化する設定
+  workflow_dispatch:
+
+# 3. リポジトリへの書き込み権限を付与（生成されたJSONファイルを保存するために必須）
+permissions:
+  contents: write
+
+# 4. 実行する作業の内容
+jobs:
+  build:
+    # 実行するクラウド環境の指定（最新のUbuntu Linux）
+    runs-on: ubuntu-latest
+
+    steps:
+    # ステップ1: 自分のリポジトリのコードをクラウドPC上にダウンロードしてくる
+    - name: Check out repository
+      uses: actions/checkout@v3
+
+    # ステップ2: Python環境（Ver 3.10）をセットアップする
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    # ステップ3: requirements.txtから必要なライブラリ（pandasやlightgbmなど）をインストール
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # ステップ4: 自動予測スクリプトを実行する
+    - name: Run batch prediction
+      run: python batch_predict.py
+
+    # ステップ5: 生成された json ファイルをリポジトリに自動保存（Git Commit & Push）する
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add latest_predictions.json
+        git commit -m "Auto: Update daily predictions [skip ci]" || exit 0
+        git push

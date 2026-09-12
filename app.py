@@ -3,11 +3,18 @@ import os
 import pandas as pd
 import streamlit as st
 
-# ブラウザのタブタイトルを設定
+# ブラウザタブのタイトル設定
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
-# メインのアプリタイトル
-st.title("🚤 MYAI_BOATRACE")
+# ヘッダーエリア（タイトルと更新ボタン）
+col_title, col_btn = st.columns([4, 1])
+with col_title:
+  st.title("🚤 MYAI_BOATRACE")
+with col_btn:
+  st.write("")  # レイアウト調整用
+  if st.button("🔄 データを最新に更新"):
+    st.cache_data.clear()  # キャッシュをクリア
+    st.rerun()  # 画面を再描画
 
 
 @st.cache_data(ttl=600)
@@ -25,19 +32,25 @@ if pred_data is None:
       "現在予測データがありません。GitHub Actionsの実行をお待ちください。"
   )
 else:
-  st.caption(f"最終更新日: {pred_data.get('updated_at')}")
+  st.caption(f"最終更新日時: {pred_data.get('updated_at')}")
 
   places_data = pred_data.get("data", {})
   place_options = {
       v["place_name"]: k
       for k, v in places_data.items()
-      if len(v["races"]) > 0
+      if len(v.get("races", {})) > 0
   }
 
   if not place_options:
     st.info("本日の開催レースデータはまだ更新されていません。")
   else:
     st.sidebar.header("📌 レース選択")
+
+    # サイドバーにも更新ボタンを配置
+    if st.sidebar.button("🔄 予想データを再取得"):
+      st.cache_data.clear()
+      st.rerun()
+
     selected_place_name = st.sidebar.selectbox(
         "開催場", list(place_options.keys())
     )

@@ -3,3 +3,5 @@ lightgbm
 pandas
 numpy
 scikit-learn
+requests
+beautifulsoup4

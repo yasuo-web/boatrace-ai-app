@@ -1,11 +1,11 @@
 import pickle
 import numpy as np
 import pandas as pd
-from scraper import get_race_data  # 作成したスクレイパーをインポート
+from scraper import create_features, get_race_data
 import streamlit as st
 
 st.set_page_config(page_title="AI競艇予想 Webアプリ", layout="wide")
-st.title("🚤 AI競艇予想 Webアプリ（自動取得版）")
+st.title("🚤 AI競艇予想 Webアプリ（特徴量拡張版）")
 
 
 @st.cache_resource
@@ -16,7 +16,6 @@ def load_model():
 
 model = load_model()
 
-# --- 競艇場コードの定義 ---
 JCD_MAP = {
     "桐生": "01",
     "戸田": "02",
@@ -44,13 +43,12 @@ JCD_MAP = {
     "大村": "24",
 }
 
-# サイドバーでレース選択
 st.sidebar.header("📌 レース選択")
 selected_place = st.sidebar.selectbox("開催場", list(JCD_MAP.keys()))
 selected_rno = st.sidebar.slider("レース番号", 1, 12, 1)
 selected_date = st.sidebar.date_input("日付")
 
-date_str = selected_date.strftime("%Y%m%m")
+date_str = selected_date.strftime("%Y%m%d")
 jcd = JCD_MAP[selected_place]
 
 if st.sidebar.button("出走表を自動取得"):
@@ -60,30 +58,35 @@ if st.sidebar.button("出走表を自動取得"):
       st.session_state["race_df"] = df_fetched
       st.success("取得完了しました！")
     else:
-      st.error("データの取得に失敗しました。開催情報をご確認ください。")
+      st.error("データの取得に失敗しました。")
 
-# データが存在すれば予想を実行
 if "race_df" in st.session_state:
-  df_input = st.session_state["race_df"]
+  df_raw = st.session_state["race_df"]
   st.subheader(
-      f"📋 {selected_place} {selected_rno}R 出走表データ（自動取得）"
+      f"📋 {selected_place} {selected_rno}R 出走表データ（生データ）"
   )
-  st.dataframe(df_input, use_container_width=True)
+  st.dataframe(df_raw, use_container_width=True)
 
   if st.button("AIで勝率を予想する", type="primary"):
-    probs = model.predict_proba(
-        df_input[
-            [
-                "boat_number",
-                "national_win_rate",
-                "local_win_rate",
-                "motor_2in_rate",
-                "exhibit_time",
-            ]
-        ]
-    )[:, 1]
+    # 推論直前に特徴量生成エンジンを通す
+    df_features = create_features(df_raw)
 
+    feature_cols = [
+        "boat_number",
+        "national_win_rate",
+        "local_win_rate",
+        "motor_2in_rate",
+        "exhibit_time",
+        "is_boat_1",
+        "has_flying",
+        "boat1_and_flying",
+        "ex_time_rel",
+        "st_rel",
+    ]
+
+    probs = model.predict_proba(df_features[feature_cols])[:, 1]
     norm_probs = (probs / np.sum(probs)) * 100
+
     df_result = pd.DataFrame({
         "艇番": [f"{i}号艇" for i in range(1, 7)],
         "予想勝利確率 (%)": np.round(norm_probs, 1),

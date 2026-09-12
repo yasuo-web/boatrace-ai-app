@@ -16,7 +16,7 @@ st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
 
 # --- キャッシュ定義（アプリ起動時 / クリア時のみ実行） ---
-@st.cache_data(ttl=3600)  # 基本はキャッシュを利用
+@st.cache_data(ttl=3600, show_spinner=False)  # 基本はキャッシュを利用
 def fetch_active_places_cached(date_str: str):
   return get_active_places(date_str)
 

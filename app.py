@@ -14,6 +14,13 @@ import streamlit as st
 
 st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
 
+
+# --- キャッシュ定義（アプリ起動時 / クリア時のみ実行） ---
+@st.cache_data(ttl=3600)  # 基本はキャッシュを利用
+def fetch_active_places_cached(date_str: str):
+  return get_active_places(date_str)
+
+
 # --- ヘッダーエリア ---
 col_title, col_reload = st.columns([4, 1])
 
@@ -21,9 +28,10 @@ with col_title:
   st.title("🚤 MYAI_BOATRACE")
 
 with col_reload:
-  st.write("")  # 垂直位置の微調整
-  # 手動更新ボタン（クリックでキャッシュクリア＆画面リロード）
+  st.write("")  # 垂直位置調整
+  # 手動更新ボタン：キャッシュをクリアして再取得＆再描画
   if st.button("🔄 最新情報に更新", use_container_width=True):
+    st.cache_data.clear()
     st.rerun()
 
 # 日本時間（Asia/Tokyo）の取得と表示フォーマット設定
@@ -90,9 +98,9 @@ def calculate_trifecta_probs(p):
   return trifecta
 
 
-# --- 本日開催会場の動的取得 ---
+# --- 本日開催会場の動的取得（起動時および手動更新時のみ動作） ---
 with st.spinner("本日開催中の会場を取得中..."):
-  active_places = get_active_places(date_str)
+  active_places = fetch_active_places_cached(date_str)
 
 st.write("---")
 

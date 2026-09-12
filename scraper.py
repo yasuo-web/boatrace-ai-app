@@ -35,28 +35,61 @@ JCD_MAP = {
 
 
 def get_active_places(date_str: str) -> dict:
-  """本日開催されている会場一覧を取得 {会場名: jcd}"""
+  """本日「現在実際に開催中」の会場のみを判別して取得 {会場名: jcd}"""
   url = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
   headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
   active_places = {}
   try:
     res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparent_encoding
+    res.encoding = res.apparentencoding
     if res.status_code != 200:
       return active_places
 
     soup = BeautifulSoup(res.text, "html.parser")
+
+    # indexページの各会場テーブル/セルを走査
+    # 開催中の会場エリアには table.is-w780 または td.is-arrow などの要素が含まれる
     links = soup.find_all(
         "a", href=re.compile(r"/owpc/pc/race/raceindex\?jcd=")
     )
 
     for link in links:
-      match = re.search(r"jcd=(\d{2})", link["href"])
-      if match:
-        jcd = match.group(1)
-        if jcd in JCD_MAP:
-          active_places[JCD_MAP[jcd]] = jcd
+      href = link.get("href", "")
+      match = re.search(r"jcd=(\d{2})", href)
+      if not match:
+        continue
+
+      jcd = match.group(1)
+      if jcd not in JCD_MAP:
+        continue
+
+      # 親要素（tdやdivなど）から開催ステータスをチェック
+      parent_td = link.find_parent("td")
+      if parent_td:
+        # 非開催・発売なしなどの除外判定テキスト
+        td_text = parent_td.get_text(strip=True)
+        if any(
+            ng_word in td_text
+            for ng_word in ["中止", "不成立", "前売", "非開催"]
+        ):
+          continue
+
+        # 開催中を示すクラス（is-arrow, is-state, is-statusなど）が存在するか確認
+        classes = parent_td.get("class", [])
+        is_active_cell = any("is-arrow" in c for c in classes) or any(
+            "is-state" in c for c in classes
+        )
+
+        # リンク画像（imgのalt属性など）での判定補助
+        img = link.find("img")
+        img_alt = img.get("alt", "") if img else ""
+
+        if is_active_cell or "レース場" in img_alt or jcd in JCD_MAP:
+          # 場外専用リンク（hrefに別パラメータがあるもの等）を除外
+          if "jcd=" in href and "hd=" in href:
+            active_places[JCD_MAP[jcd]] = jcd
+
   except Exception:
     pass
 
@@ -71,7 +104,7 @@ def get_purchasable_races(jcd: str, date_str: str) -> list:
   purchasable_races = []
   try:
     res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparent_encoding
+    res.encoding = res.apparentencoding
     if res.status_code != 200:
       return [i for i in range(1, 13)]
 
@@ -114,7 +147,7 @@ def get_race_data(jcd: str, rno: int, date_str: str) -> pd.DataFrame:
 
   try:
     res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparent_encoding
+    res.encoding = res.apparentencoding
     if res.status_code != 200:
       return None
 
@@ -171,7 +204,7 @@ def get_odds_data(jcd: str, rno: int, date_str: str) -> dict:
   odds_dict = {}
   try:
     res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparent_encoding
+    res.encoding = res.apparentencoding
     if res.status_code != 200:
       return odds_dict
 

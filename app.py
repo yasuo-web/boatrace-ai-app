@@ -1,343 +1,91 @@
-from datetime import datetime
-import pickle
-import random
-from zoneinfo import ZoneInfo
-import numpy as np
+import os
+import json
 import pandas as pd
-from scraper import (
-    create_features,
-    get_active_places,
-    get_odds_data,
-    get_purchasable_races,
-    get_race_data,
-)
 import streamlit as st
+import lightgbm as lgb
+from datetime import datetime
 
-st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
+st.set_page_config(page_title="競艇予測システム", layout="wide")
 
+st.title("競艇 AI予測ダッシュボード")
 
-# --- キャッシュ定義（自動スピナー非表示設定） ---
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_active_places_cached(date_str: str):
-  return get_active_places(date_str)
+# タブ切り替え（リアルタイム/サンプル表示 ⇔ 過去検証）
+tab1, tab2 = st.tabs(["🎯 リアルタイム/サンプル予測", "📜 過去検証"])
 
-
-# --- ヘッダーエリア ---
-col_title, col_reload = st.columns([4, 1])
-
-with col_title:
-  st.title("🚤 MYAI_BOATRACE")
-
-with col_reload:
-  st.write("")  # 垂直位置調整
-  if st.button("🔄 最新情報に更新", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
-
-# 日本時間（Asia/Tokyo）の取得と表示フォーマット設定
-jst = ZoneInfo("Asia/Tokyo")
-now_jst = datetime.now(jst)
-date_str = now_jst.strftime("%Y%m%d")
-
-WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
-weekday_str = WEEKDAYS_JP[now_jst.weekday()]
-formatted_datetime = (
-    f"{now_jst.strftime('%Y年%m月%d日')} ({weekday_str}) "
-    f"{now_jst.strftime('%H:%M')}"
-)
-
-st.caption(formatted_datetime)
-
-FEATURE_COLS = [
-    "boat_number",
-    "rank_score",
-    "national_win_rate",
-    "local_win_rate",
-    "motor_2in_rate",
-    "exhibit_time",
-    "f_count",
-    "avg_st",
-    "entry_course",
-    "is_course_1",
-    "course_changed",
-    "ex_time_rel",
-    "st_rel",
-    "kadomakuri_threat",
-    "outer_follow_advantage",
-]
-
-
-@st.cache_resource
-def load_model():
-  try:
-    with open("boat_model.pkl", "rb") as f:
-      return pickle.load(f)
-  except Exception:
-    return None
-
-
-model = load_model()
-
-
-def calculate_trifecta_probs(p):
-  """全120通りの3連単確率を計算"""
-  p = np.array(p)
-  p = p / np.sum(p)
-  n = len(p)
-  trifecta = {}
-
-  for i in range(n):
-    for j in range(n):
-      if i == j:
-        continue
-      p_i_j = p[i] * (p[j] / (1 - p[i]))
-      for k in range(n):
-        if k == i or k == j:
-          continue
-        p_i_j_k = p_i_j * (p[k] / (1 - p[i] - p[j]))
-        combo = f"{i+1}-{j+1}-{k+1}"
-        trifecta[combo] = p_i_j_k * 100
-
-  return trifecta
-
-
-def generate_sample_predictions():
-  """非開催時確認用のダミー予測データ生成"""
-  combos = []
-  for i in range(1, 7):
-    for j in range(1, 7):
-      if i == j:
-        continue
-      for k in range(1, 7):
-        if k == i or k == j:
-          continue
-        combos.append(f"{i}-{j}-{k}")
-
-  predictions = []
-  for idx, combo in enumerate(combos):
-    if combo.startswith("1-"):
-      ai_prob = round(random.uniform(2.0, 15.0), 1)
-      odds = round(random.uniform(6.0, 45.0), 1)
-    elif combo.startswith("2-") or combo.startswith("3-"):
-      ai_prob = round(random.uniform(0.5, 5.0), 1)
-      odds = round(random.uniform(30.0, 120.0), 1)
+# ------------------------------------------------------------------
+# Tab 1: 通常のリアルタイム・サンプルデータ表示
+# ------------------------------------------------------------------
+with tab1:
+    st.header("最新レース予測結果")
+    
+    # latest_predictions.json の読み込みと表示
+    if os.path.exists("latest_predictions.json"):
+        with open("latest_predictions.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        st.caption(f"最終更新日時: {data.get('updated_at', '不明')}")
+        
+        # 上位5点 ＆ 万舟表示等のメインUI処理
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🔥 買い目 上位5点")
+            # データの表示処理
+            st.dataframe(pd.DataFrame(data.get("top_predictions", [])))
+            
+        with col2:
+            st.subheader("💰 万舟フラグ（100倍以上）")
+            st.dataframe(pd.DataFrame(data.get("high_odds_predictions", [])))
     else:
-      ai_prob = round(random.uniform(0.05, 1.2), 2)
-      odds = round(random.uniform(100.0, 450.0), 1)
+        st.info("現在利用可能な最新予測データがありません。サンプルデータを表示します。")
+        # サンプルデータ処理
 
-    ev = round((ai_prob / 100) * odds, 2)
-    t3_odds = round(odds * random.uniform(0.15, 0.35), 1)
-
-    predictions.append({
-        "買い目": combo,
-        "オッズ_num": odds,
-        "オッズ": f"{odds:.1f}倍",
-        "人気": f"{idx + 1}人気",
-        "3連複オッズ": f"{t3_odds:.1f}倍",
-        "AI予測確率": f"{ai_prob}%",
-        "AI予測確率_num": ai_prob,
-        "AI期待値": ev,
-    })
-  return pd.DataFrame(predictions)
-
-
-# --- 本日開催会場の動的取得 ---
-with st.spinner("現在開催中の会場を取得中..."):
-  active_places = fetch_active_places_cached(date_str)
-
-st.write("---")
-
-# 動作確認用サンプルモード切替
-use_sample = st.checkbox(
-    "🧪 サンプルデータで表示結果を確認する（夜間・非開催時用）"
-)
-
-if not active_places and not use_sample:
-  st.warning(
-      "現在開催中の会場がないか、本日のレース日程が終了している可能性があります。"
-      "（※表示確認は上の「サンプルデータで表示結果を確認する」をチェックしてください）"
-  )
-else:
-  col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
-
-  if use_sample:
-    display_place_name = "住之江 [サンプル]"
-    display_race_no = 12
+# ------------------------------------------------------------------
+# Tab 2: 過去検証機能
+# ------------------------------------------------------------------
+with tab2:
+    st.header("過去データ検証（バックテスト）")
+    
+    col_date, col_place, col_race = st.columns(3)
+    
+    with col_date:
+        target_date = st.date_input("検証対象日", value=datetime.today())
     with col_place:
-      st.selectbox("開催会場", [display_place_name], disabled=True)
+        # 全24会場選択
+        stadiums = [
+            "桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖", 
+            "蒲郡", "常滑", "津", "三国", "びわこ", "住之江", 
+            "尼崎", "鳴門", "丸亀", "児島", "宮島", "徳山", 
+            "下関", "若松", "芦屋", "福岡", "唐津", "大村"
+        ]
+        selected_stadium = st.selectbox("会場", stadiums)
     with col_race:
-      st.selectbox("対象レース", ["12R"], disabled=True)
-    with col_btn:
-      st.write("")
-      st.write("")
-      submit_btn = st.button(
-          "🎯 決定（予想実行）", type="primary", use_container_width=True
-      )
-  else:
-    with col_place:
-      selected_place = st.selectbox("開催会場", list(active_places.keys()))
-      jcd = active_places[selected_place]
+        selected_race = st.selectbox("レース番号", [f"{i}R" for i in range(1, 13)])
 
-    purchasable_races = get_purchasable_races(jcd, date_str)
-
-    with col_race:
-      if not purchasable_races:
-        st.selectbox("対象レース", ["本日全レース終了"], disabled=True)
-        selected_rno = None
-      else:
-        race_options = [f"{r}R" for r in purchasable_races]
-        selected_race_str = st.selectbox("対象レース", race_options)
-        selected_rno = int(selected_race_str.replace("R", ""))
-
-    with col_btn:
-      st.write("")
-      st.write("")
-      submit_btn = st.button(
-          "🎯 決定（予想実行）",
-          type="primary",
-          use_container_width=True,
-          disabled=(selected_rno is None),
-      )
-    display_place_name = selected_place if "selected_place" in locals() else ""
-    display_race_no = selected_rno if "selected_rno" in locals() else None
-
-  st.write("---")
-
-  if submit_btn:
-    if use_sample:
-      df_all = generate_sample_predictions()
-    else:
-      with st.spinner(
-          f"{display_place_name} {display_race_no}R の最新データ・オッズを取得中..."
-      ):
-        df_raw = get_race_data(jcd, display_race_no, date_str)
-        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
-            jcd, display_race_no, date_str
-        )
-
-        if df_raw is None or df_raw.empty:
-          st.error(
-              "レースデータの取得に失敗しました。直前データ更新前などの可能性があります。"
-          )
-          df_all = None
+    if st.button("過去検証を実行"):
+        date_str = target_date.strftime("%Y-%m-%d")
+        st.write(f"**【検証条件】** {date_str} / {selected_stadium} / {selected_race}")
+        
+        # 過去ログファイルまたはデータベースからの読み込み処理
+        history_file = f"history/{date_str}.json"
+        
+        if os.path.exists(history_file):
+            with open(history_file, "r", encoding="utf-8") as f:
+                hist_data = json.load(f)
+            
+            # 該当レースの抽出と照合表示
+            target_key = f"{selected_stadium}_{selected_race}"
+            if target_key in hist_data:
+                res = hist_data[target_key]
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.subheader("🤖 AI予測結果")
+                    st.table(pd.DataFrame(res.get("predictions", [])))
+                with c2:
+                    st.subheader("🏁 実際の確定着順・払戻")
+                    st.table(pd.DataFrame(res.get("actual_results", [])))
+                    st.success(f"回収結果: {res.get('payout_summary', 'データなし')}")
+            else:
+                st.warning("指定されたレースの検証データが見つかりませんでした。")
         else:
-          df_features = create_features(df_raw)
-          probs = (
-              model.predict_proba(df_features[FEATURE_COLS])[:, 1]
-              if model
-              else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
-          )
-          trifecta_probs = calculate_trifecta_probs(probs)
-
-          predictions = []
-          for combo, ai_prob in trifecta_probs.items():
-            odds = odds_dict.get(combo, 10.0)
-            rank = odds_rank_dict.get(combo, "-")
-
-            # 3連複オッズの参照（組み合わせソート）
-            trio_key = "-".join(sorted(combo.split("-")))
-            trio_odds = trio_odds_dict.get(trio_key, 0.0)
-
-            ev = (ai_prob / 100) * odds
-
-            predictions.append({
-                "買い目": combo,
-                "オッズ_num": odds,
-                "オッズ": f"{odds:.1f}倍",
-                "人気": f"{rank}人気" if str(rank).isdigit() else "-",
-                "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
-                "AI予測確率": f"{round(ai_prob, 1)}%",
-                "AI予測確率_num": ai_prob,
-                "AI期待値": round(ev, 2),
-            })
-
-          df_all = pd.DataFrame(predictions)
-
-    if df_all is not None:
-      st.toast("✅ 予想結果を出力しました！", icon="🎉")
-
-      DISPLAY_COLS = [
-          "買い目",
-          "オッズ",
-          "人気",
-          "3連複オッズ",
-          "AI予測確率",
-          "AI期待値",
-      ]
-
-      # 1. AI厳選買い目（上位5点表表示）
-      st.subheader(
-          f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
-      )
-
-      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
-
-      st.dataframe(
-          df_top5[DISPLAY_COLS],
-          hide_index=True,
-          use_container_width=True,
-      )
-
-      st.write("---")
-
-      # 2. オッズ100倍以上の大穴予想
-      st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
-
-      df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
-
-      if df_100plus.empty:
-        st.info("※現在、このレースにはオッズ100倍以上の買い目が存在しません。")
-      else:
-        top_ev_100 = df_100plus.sort_values(
-            by="AI期待値", ascending=False
-        ).iloc[0]
-        top_prob_100 = df_100plus.sort_values(
-            by="AI予測確率_num", ascending=False
-        ).iloc[0]
-        random_100 = df_100plus.sample(n=1).iloc[0]
-
-        cols_hole = st.columns(3)
-
-        with cols_hole[0]:
-          st.metric(
-              label="🔥 高期待値 NO.1",
-              value=top_ev_100["買い目"],
-              delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
-          )
-
-        with cols_hole[1]:
-          st.metric(
-              label="🧠 理論勝率 NO.1",
-              value=top_prob_100["買い目"],
-              delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率']}",
-          )
-
-        with cols_hole[2]:
-          st.metric(
-              label="🎲 ランダム一発勝負",
-              value=random_100["買い目"],
-              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
-          )
-
-        df_hole = pd.DataFrame([top_ev_100, top_prob_100, random_100]).drop_duplicates(
-            subset=["買い目"]
-        )
-        st.write("")
-        st.dataframe(
-            df_hole[DISPLAY_COLS],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-      st.write("---")
-
-      # 一番下部に指標の解説文を追加
-      st.markdown(
-          "💡 **AI予測確率**："
-          " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
-      )
-      st.markdown(
-          "💡 **AI期待値**："
-          " (AI予測確率 ÷ 100) ×"
-          " オッズで算出される購入コストに対する回収見込み（1.0以上が買い価値あり）です。"
-      )
+            st.error(f"{date_str} の過去データログが存在しません。")

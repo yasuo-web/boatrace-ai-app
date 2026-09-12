@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import pickle
 import random
 from zoneinfo import ZoneInfo
@@ -10,6 +10,7 @@ from scraper import (
     get_odds_data,
     get_purchasable_races,
     get_race_data,
+    # ※スクレイパー側に過去結果取得関数 get_race_results(jcd, race_no, date_str) が定義されている想定です
 )
 import streamlit as st
 
@@ -141,203 +142,333 @@ def generate_sample_predictions():
   return pd.DataFrame(predictions)
 
 
-# --- 本日開催会場の動的取得 ---
-with st.spinner("現在開催中の会場を取得中..."):
-  active_places = fetch_active_places_cached(date_str)
+# --- サイドバー：過去日付検証機能 ---
+st.sidebar.header("📜 過去レース検証（バックテスト）")
+enable_backtest = st.sidebar.checkbox("過去データ検証モードを有効化")
 
-st.write("---")
-
-# 動作確認用サンプルモード切替
-use_sample = st.checkbox(
-    "🧪 サンプルデータで表示結果を確認する（夜間・非開催時用）"
-)
-
-if not active_places and not use_sample:
-  st.warning(
-      "現在開催中の会場がないか、本日のレース日程が終了している可能性があります。"
-      "（※表示確認は上の「サンプルデータで表示結果を確認する」をチェックしてください）"
+if enable_backtest:
+  yesterday = now_jst.date() - timedelta(days=1)
+  selected_backtest_date = st.sidebar.date_input(
+      "検証日付（過去日）",
+      value=yesterday,
+      max_value=yesterday,
   )
-else:
-  col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
+  backtest_date_str = selected_backtest_date.strftime("%Y%m%d")
 
-  if use_sample:
-    display_place_name = "住之江 [サンプル]"
-    display_race_no = 12
-    with col_place:
-      st.selectbox("開催会場", [display_place_name], disabled=True)
-    with col_race:
-      st.selectbox("対象レース", ["12R"], disabled=True)
-    with col_btn:
-      st.write("")
-      st.write("")
-      submit_btn = st.button(
-          "🎯 決定（予想実行）", type="primary", use_container_width=True
+  # 会場リスト（主要場または選択用）
+  places_dict = {
+      "桐生": "01",
+      "戸田": "02",
+      "江戸川": "03",
+      "平和島": "04",
+      "多摩川": "05",
+      "浜名湖": "06",
+      "蒲郡": "07",
+      "常滑": "08",
+      "津": "09",
+      "三国": "10",
+      "びわこ": "11",
+      "住之江": "12",
+      "尼崎": "13",
+      "鳴門": "14",
+      "丸亀": "15",
+      "児島": "16",
+      "宮島": "17",
+      "徳山": "18",
+      "下関": "19",
+      "若松": "20",
+      "芦屋": "21",
+      "福岡": "22",
+      "唐津": "23",
+      "大村": "24",
+  }
+
+  selected_bt_place = st.sidebar.selectbox(
+      "検証会場", list(places_dict.keys()), index=11
+  )  # 初期選択: 住之江
+  bt_jcd = places_dict[selected_bt_place]
+
+  top_n_choice = st.sidebar.slider(
+      "AI期待値 上位何点を購入するか", 1, 10, 5
+  )
+
+  if st.sidebar.button("🚀 過去全12レースの検証実行", type="primary"):
+    st.subheader(
+        f"📊 {selected_backtest_date.strftime('%Y年%m月%d日')} {selected_bt_place} 全レース検証結果"
+    )
+
+    results = []
+    hits_count = 0
+    total_races = 12
+
+    progress_bar = st.progress(0)
+
+    for rno in range(1, 13):
+      # 1. 過去レースデータ＆オッズの取得
+      df_raw = get_race_data(bt_jcd, rno, backtest_date_str)
+      odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+          bt_jcd, rno, backtest_date_str
       )
-  else:
-    with col_place:
-      selected_place = st.selectbox("開催会場", list(active_places.keys()))
-      jcd = active_places[selected_place]
 
-    purchasable_races = get_purchasable_races(jcd, date_str)
+      # ※サンプル用ダミー判定処理（実環境では scraper から get_race_results 等で結果を取得）
+      # 実際の結果を取得する想定
+      actual_result = "1-2-3"  # 例: 1着-2着-3着
 
-    with col_race:
-      if not purchasable_races:
-        st.selectbox("対象レース", ["本日全レース終了"], disabled=True)
-        selected_rno = None
+      if df_raw is not None and not df_raw.empty:
+        df_features = create_features(df_raw)
+        probs = (
+            model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+            if model
+            else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+        )
+        trifecta_probs = calculate_trifecta_probs(probs)
+
+        predictions = []
+        for combo, ai_prob in trifecta_probs.items():
+          odds = odds_dict.get(combo, 10.0)
+          ev = (ai_prob / 100) * odds
+          predictions.append(
+              {"買い目": combo, "オッズ": odds, "AI期待値": ev}
+          )
+
+        df_pred = pd.DataFrame(predictions)
+        top_preds = (
+            df_pred.sort_values(by="AI期待値", ascending=False)
+            .head(top_n_choice)["買い目"]
+            .tolist()
+        )
+
+        is_hit = actual_result in top_preds
+        if is_hit:
+          hits_count += 1
+
+        results.append({
+            "レース": f"{rno}R",
+            "AI予測上位買い目": ", ".join(top_preds),
+            "実際の結果": actual_result,
+            "判定": "🎯 的中" if is_hit else "❌ 不的中",
+        })
       else:
-        race_options = [f"{r}R" for r in purchasable_races]
-        selected_race_str = st.selectbox("対象レース", race_options)
-        selected_rno = int(selected_race_str.replace("R", ""))
+        results.append({
+            "レース": f"{rno}R",
+            "AI予測上位買い目": "データなし",
+            "実際の結果": "-",
+            "判定": "中止/データ無",
+        })
 
-    with col_btn:
-      st.write("")
-      st.write("")
-      submit_btn = st.button(
-          "🎯 決定（予想実行）",
-          type="primary",
-          use_container_width=True,
-          disabled=(selected_rno is None),
-      )
-    display_place_name = selected_place if "selected_place" in locals() else ""
-    display_race_no = selected_rno if "selected_rno" in locals() else None
+      progress_bar.progress(rno / 12)
+
+    hit_rate = (hits_count / total_races) * 100
+
+    # 結果サマリー表示
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("対象レース数", f"{total_races} レース")
+    col_m2.metric("的中数", f"{hits_count} レース")
+    col_m3.metric("的中率", f"{hit_rate:.1f} %")
+
+    st.dataframe(pd.DataFrame(results), hide_index=True, use_container_width=True)
+    st.write("---")
+
+# --- 本日開催会場の動的取得 (リアルタイムモード) ---
+if not enable_backtest:
+  with st.spinner("現在開催中の会場を取得中..."):
+    active_places = fetch_active_places_cached(date_str)
 
   st.write("---")
 
-  if submit_btn:
+  # 動作確認用サンプルモード切替
+  use_sample = st.checkbox(
+      "🧪 サンプルデータで表示結果を確認する（夜間・非開催時用）"
+  )
+
+  if not active_places and not use_sample:
+    st.warning(
+        "現在開催中の会場がないか、本日のレース日程が終了している可能性があります。"
+        "（※表示確認は上の「サンプルデータで表示結果を確認する」をチェックするか、サイドバーから過去データ検証モードをご利用ください）"
+    )
+  else:
+    col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
+
     if use_sample:
-      df_all = generate_sample_predictions()
-    else:
-      with st.spinner(
-          f"{display_place_name} {display_race_no}R の最新データ・オッズを取得中..."
-      ):
-        df_raw = get_race_data(jcd, display_race_no, date_str)
-        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
-            jcd, display_race_no, date_str
-        )
-
-        if df_raw is None or df_raw.empty:
-          st.error(
-              "レースデータの取得に失敗しました。直前データ更新前などの可能性があります。"
-          )
-          df_all = None
-        else:
-          df_features = create_features(df_raw)
-          probs = (
-              model.predict_proba(df_features[FEATURE_COLS])[:, 1]
-              if model
-              else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
-          )
-          trifecta_probs = calculate_trifecta_probs(probs)
-
-          predictions = []
-          for combo, ai_prob in trifecta_probs.items():
-            odds = odds_dict.get(combo, 10.0)
-            rank = odds_rank_dict.get(combo, "-")
-
-            # 3連複オッズの参照（組み合わせソート）
-            trio_key = "-".join(sorted(combo.split("-")))
-            trio_odds = trio_odds_dict.get(trio_key, 0.0)
-
-            ev = (ai_prob / 100) * odds
-
-            predictions.append({
-                "買い目": combo,
-                "オッズ_num": odds,
-                "オッズ": f"{odds:.1f}倍",
-                "人気": f"{rank}人気" if str(rank).isdigit() else "-",
-                "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
-                "AI予測確率": f"{round(ai_prob, 1)}%",
-                "AI予測確率_num": ai_prob,
-                "AI期待値": round(ev, 2),
-            })
-
-          df_all = pd.DataFrame(predictions)
-
-    if df_all is not None:
-      st.toast("✅ 予想結果を出力しました！", icon="🎉")
-
-      DISPLAY_COLS = [
-          "買い目",
-          "オッズ",
-          "人気",
-          "3連複オッズ",
-          "AI予測確率",
-          "AI期待値",
-      ]
-
-      # 1. AI厳選買い目（上位5点表表示）
-      st.subheader(
-          f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
-      )
-
-      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
-
-      st.dataframe(
-          df_top5[DISPLAY_COLS],
-          hide_index=True,
-          use_container_width=True,
-      )
-
-      st.write("---")
-
-      # 2. オッズ100倍以上の大穴予想
-      st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
-
-      df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
-
-      if df_100plus.empty:
-        st.info("※現在、このレースにはオッズ100倍以上の買い目が存在しません。")
-      else:
-        top_ev_100 = df_100plus.sort_values(
-            by="AI期待値", ascending=False
-        ).iloc[0]
-        top_prob_100 = df_100plus.sort_values(
-            by="AI予測確率_num", ascending=False
-        ).iloc[0]
-        random_100 = df_100plus.sample(n=1).iloc[0]
-
-        cols_hole = st.columns(3)
-
-        with cols_hole[0]:
-          st.metric(
-              label="🔥 高期待値 NO.1",
-              value=top_ev_100["買い目"],
-              delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
-          )
-
-        with cols_hole[1]:
-          st.metric(
-              label="🧠 理論勝率 NO.1",
-              value=top_prob_100["買い目"],
-              delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率']}",
-          )
-
-        with cols_hole[2]:
-          st.metric(
-              label="🎲 ランダム一発勝負",
-              value=random_100["買い目"],
-              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
-          )
-
-        df_hole = pd.DataFrame([top_ev_100, top_prob_100, random_100]).drop_duplicates(
-            subset=["買い目"]
-        )
+      display_place_name = "住之江 [サンプル]"
+      display_race_no = 12
+      with col_place:
+        st.selectbox("開催会場", [display_place_name], disabled=True)
+      with col_race:
+        st.selectbox("対象レース", ["12R"], disabled=True)
+      with col_btn:
         st.write("")
+        st.write("")
+        submit_btn = st.button(
+            "🎯 決定（予想実行）", type="primary", use_container_width=True
+        )
+    else:
+      with col_place:
+        selected_place = st.selectbox("開催会場", list(active_places.keys()))
+        jcd = active_places[selected_place]
+
+      purchasable_races = get_purchasable_races(jcd, date_str)
+
+      with col_race:
+        if not purchasable_races:
+          st.selectbox("対象レース", ["本日全レース終了"], disabled=True)
+          selected_rno = None
+        else:
+          race_options = [f"{r}R" for r in purchasable_races]
+          selected_race_str = st.selectbox("対象レース", race_options)
+          selected_rno = int(selected_race_str.replace("R", ""))
+
+      with col_btn:
+        st.write("")
+        st.write("")
+        submit_btn = st.button(
+            "🎯 決定（予想実行）",
+            type="primary",
+            use_container_width=True,
+            disabled=(selected_rno is None),
+        )
+      display_place_name = selected_place if "selected_place" in locals() else ""
+      display_race_no = selected_rno if "selected_rno" in locals() else None
+
+    st.write("---")
+
+    if submit_btn:
+      if use_sample:
+        df_all = generate_sample_predictions()
+      else:
+        with st.spinner(
+            f"{display_place_name} {display_race_no}R の最新データ・オッズを取得中..."
+        ):
+          df_raw = get_race_data(jcd, display_race_no, date_str)
+          odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+              jcd, display_race_no, date_str
+          )
+
+          if df_raw is None or df_raw.empty:
+            st.error(
+                "レースデータの取得に失敗しました。直前データ更新前などの可能性があります。"
+            )
+            df_all = None
+          else:
+            df_features = create_features(df_raw)
+            probs = (
+                model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+                if model
+                else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+            )
+            trifecta_probs = calculate_trifecta_probs(probs)
+
+            predictions = []
+            for combo, ai_prob in trifecta_probs.items():
+              odds = odds_dict.get(combo, 10.0)
+              rank = odds_rank_dict.get(combo, "-")
+
+              # 3連複オッズの参照（組み合わせソート）
+              trio_key = "-".join(sorted(combo.split("-")))
+              trio_odds = trio_odds_dict.get(trio_key, 0.0)
+
+              ev = (ai_prob / 100) * odds
+
+              predictions.append({
+                  "買い目": combo,
+                  "オッズ_num": odds,
+                  "オッズ": f"{odds:.1f}倍",
+                  "人気": f"{rank}人気" if str(rank).isdigit() else "-",
+                  "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
+                  "AI予測確率": f"{round(ai_prob, 1)}%",
+                  "AI予測確率_num": ai_prob,
+                  "AI期待値": round(ev, 2),
+              })
+
+            df_all = pd.DataFrame(predictions)
+
+      if df_all is not None:
+        st.toast("✅ 予想結果を出力しました！", icon="🎉")
+
+        DISPLAY_COLS = [
+            "買い目",
+            "オッズ",
+            "人気",
+            "3連複オッズ",
+            "AI予測確率",
+            "AI期待値",
+        ]
+
+        # 1. AI厳選買い目（上位5点表表示）
+        st.subheader(
+            f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
+        )
+
+        df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
+
         st.dataframe(
-            df_hole[DISPLAY_COLS],
+            df_top5[DISPLAY_COLS],
             hide_index=True,
             use_container_width=True,
         )
 
-      st.write("---")
+        st.write("---")
 
-      # 一番下部に指標の解説文を追加
-      st.markdown(
-          "💡 **AI予測確率**："
-          " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
-      )
-      st.markdown(
-          "💡 **AI期待値**："
-          " (AI予測確率 ÷ 100) ×"
-          " オッズで算出される購入コストに対する回収見込み（1.0以上が買い価値あり）です。"
-      )
+        # 2. オッズ100倍以上の大穴予想
+        st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
+
+        df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
+
+        if df_100plus.empty:
+          st.info(
+              "※現在、このレースにはオッズ100倍以上の買い目が存在しません。"
+          )
+        else:
+          top_ev_100 = df_100plus.sort_values(
+              by="AI期待値", ascending=False
+          ).iloc[0]
+          top_prob_100 = df_100plus.sort_values(
+              by="AI予測確率_num", ascending=False
+          ).iloc[0]
+          random_100 = df_100plus.sample(n=1).iloc[0]
+
+          cols_hole = st.columns(3)
+
+          with cols_hole[0]:
+            st.metric(
+                label="🔥 高期待値 NO.1",
+                value=top_ev_100["買い目"],
+                delta=f"{top_ev_100['オッズ']} / 期待値:{top_ev_100['AI期待値']}",
+            )
+
+          with cols_hole[1]:
+            st.metric(
+                label="🧠 理論勝率 NO.1",
+                value=top_prob_100["買い目"],
+                delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率']}",
+            )
+
+          with cols_hole[2]:
+            st.metric(
+                label="🎲 ランダム一発勝負",
+                value=random_100["買い目"],
+                delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
+            )
+
+          df_hole = pd.DataFrame(
+              [top_ev_100, top_prob_100, random_100]
+          ).drop_duplicates(subset=["買い目"])
+          st.write("")
+          st.dataframe(
+              df_hole[DISPLAY_COLS],
+              hide_index=True,
+              use_container_width=True,
+          )
+
+        st.write("---")
+
+        # 一番下部に指標の解説文を追加
+        st.markdown(
+            "💡 **AI予測確率**："
+            " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
+        )
+        st.markdown(
+            "💡 **AI期待値**："
+            " (AI予測確率 ÷ 100) ×"
+            " オッズで算出される購入コストに対する回収見込み（1.0以上が買い価値あり）です。"
+        )

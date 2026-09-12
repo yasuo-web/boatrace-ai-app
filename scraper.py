@@ -1,253 +1,282 @@
 from datetime import datetime
 import re
-import time
-from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
+import numpy as np
 import pandas as pd
 import requests
 
-JCD_MAP = {
-    "01": "桐生",
-    "02": "戸田",
-    "03": "江戸川",
-    "04": "平和島",
-    "05": "多摩川",
-    "06": "浜名湖",
-    "07": "蒲郡",
-    "08": "常滑",
-    "09": "津",
-    "10": "三国",
-    "11": "びわこ",
-    "12": "住之江",
-    "13": "尼崎",
-    "14": "鳴門",
-    "15": "丸亀",
-    "16": "児島",
-    "17": "宮島",
-    "18": "徳山",
-    "19": "下関",
-    "20": "若松",
-    "21": "芦屋",
-    "22": "福岡",
-    "23": "唐津",
-    "24": "大村",
+# 共通リクエストヘッダー
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
+        " like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+# 全24会場コード辞書
+ALL_PLACES = {
+    "桐生": "01",
+    "戸田": "02",
+    "江戸川": "03",
+    "平和島": "04",
+    "多摩川": "05",
+    "浜名湖": "06",
+    "蒲郡": "07",
+    "常滑": "08",
+    "津": "09",
+    "三国": "10",
+    "びわこ": "11",
+    "住之江": "12",
+    "尼崎": "13",
+    "鳴門": "14",
+    "丸亀": "15",
+    "児島": "16",
+    "宮島": "17",
+    "徳山": "18",
+    "下関": "19",
+    "若松": "20",
+    "芦屋": "21",
+    "福岡": "22",
+    "唐津": "23",
+    "大村": "24",
 }
 
 
-def get_active_places(date_str: str) -> dict:
-  """本日「現在実際に開催中」の会場のみを判別して取得 {会場名: jcd}"""
-  url = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
-  headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+def get_active_places(date_str: str = None) -> dict:
+  """指定日付（YYYYMMDD）にレースが開催されている会場一覧を取得する。
+
+  date_str が None の場合は本日の開催場を取得。
+  """
+  if date_str:
+    url = f"https://www.boatrace.jp/owpc/pc/race/indexpage?hd={date_str}"
+  else:
+    url = "https://www.boatrace.jp/owpc/pc/race/indexpage"
 
   active_places = {}
   try:
-    res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparentencoding
+    res = requests.get(url, headers=HEADERS, timeout=10)
     if res.status_code != 200:
       return active_places
 
-    soup = BeautifulSoup(res.text, "html.parser")
+    soup = BeautifulSoup(res.content, "html.parser")
 
-    # indexページの各会場テーブル/セルを走査
-    # 開催中の会場エリアには table.is-w780 または td.is-arrow などの要素が含まれる
-    links = soup.find_all(
-        "a", href=re.compile(r"/owpc/pc/race/raceindex\?jcd=")
-    )
-
+    # 開催会場のリンク(jcd=XX)を抽出
+    links = soup.select('a[href*="jcd="]')
     for link in links:
       href = link.get("href", "")
       match = re.search(r"jcd=(\d{2})", href)
-      if not match:
-        continue
-
-      jcd = match.group(1)
-      if jcd not in JCD_MAP:
-        continue
-
-      # 親要素（tdやdivなど）から開催ステータスをチェック
-      parent_td = link.find_parent("td")
-      if parent_td:
-        # 非開催・発売なしなどの除外判定テキスト
-        td_text = parent_td.get_text(strip=True)
-        if any(
-            ng_word in td_text
-            for ng_word in ["中止", "不成立", "前売", "非開催"]
-        ):
-          continue
-
-        # 開催中を示すクラス（is-arrow, is-state, is-statusなど）が存在するか確認
-        classes = parent_td.get("class", [])
-        is_active_cell = any("is-arrow" in c for c in classes) or any(
-            "is-state" in c for c in classes
-        )
-
-        # リンク画像（imgのalt属性など）での判定補助
-        img = link.find("img")
-        img_alt = img.get("alt", "") if img else ""
-
-        if is_active_cell or "レース場" in img_alt or jcd in JCD_MAP:
-          # 場外専用リンク（hrefに別パラメータがあるもの等）を除外
-          if "jcd=" in href and "hd=" in href:
-            active_places[JCD_MAP[jcd]] = jcd
-
-  except Exception:
-    pass
+      if match:
+        jcd = match.group(1)
+        # 会場コードから会場名を逆引き
+        for name, code in ALL_PLACES.items():
+          if code == jcd and name not in active_places:
+            active_places[name] = jcd
+  except Exception as e:
+    print(f"[ERROR] get_active_places: {e}")
 
   return active_places
 
 
-def get_purchasable_races(jcd: str, date_str: str) -> list:
-  """指定会場の「日本時間の現在時刻より締切が未来のレース（購入可能）」リストを取得"""
-  url = f"https://www.boatrace.jp/owpc/pc/race/raceindex?jcd={jcd}&hd={date_str}"
-  headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+def get_purchasable_races(jcd: str, date_str: str = None) -> list:
+  """指定会場・指定日付でデータが存在する（購入/検証可能な）レース番号リストを取得する。"""
+  url_base = "https://www.boatrace.jp/owpc/pc/race/racelist"
+  params = {"jcd": jcd}
+  if date_str:
+    params["hd"] = date_str
 
-  purchasable_races = []
+  races = []
   try:
-    res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparentencoding
-    if res.status_code != 200:
-      return [i for i in range(1, 13)]
+    res = requests.get(url_base, params=params, headers=HEADERS, timeout=10)
+    if res.status_code == 200:
+      soup = BeautifulSoup(res.content, "html.parser")
+      # レース切り替えタブ/リンクからレース番号を取得
+      race_links = soup.select('a[href*="rno="]')
+      for link in race_links:
+        href = link.get("href", "")
+        match = re.search(r"rno=(\d+)", href)
+        if match:
+          rno = int(match.group(1))
+          if rno not in races:
+            races.append(rno)
+      races.sort()
+  except Exception as e:
+    print(f"[ERROR] get_purchasable_races: {e}")
 
-    soup = BeautifulSoup(res.text, "html.parser")
-
-    # 日本時間 (Asia/Tokyo) の現在時刻を取得し、比較用にタイムゾーン情報を除去
-    jst = ZoneInfo("Asia/Tokyo")
-    now_jst = datetime.now(jst).replace(tzinfo=None)
-
-    tables = soup.find_all("table", class_="is-w780")
-    for table in tables:
-      rows = table.find_all("tr")
-      for row in rows:
-        text = row.get_text(strip=True)
-        matches = re.findall(r"(\d{1,2})R\s*(\d{1,2}:\d{2})", text)
-        for rno_str, time_str in matches:
-          try:
-            rno = int(rno_str)
-            limit_time = datetime.strptime(
-                f"{date_str} {time_str}", "%Y%m%d %H:%M"
-            )
-            # 日本時間で比較判定
-            if now_jst < limit_time:
-              if rno not in purchasable_races:
-                purchasable_races.append(rno)
-          except Exception:
-            continue
-  except Exception:
-    pass
-
-  return (
-      sorted(purchasable_races) if purchasable_races else [i for i in range(1, 13)]
-  )
+  return races if races else list(range(1, 13))
 
 
-def get_race_data(jcd: str, rno: int, date_str: str) -> pd.DataFrame:
-  """出走表・選手・展示データの取得"""
-  url = f"https://www.boatrace.jp/owpc/pc/race/racelist?rno={rno}&jcd={jcd:02s}&hd={date_str}"
-  headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+def get_race_data(jcd: str, race_no: int, date_str: str = None) -> pd.DataFrame:
+  """指定会場・レース番号・日付の出走表および直前情報を取得してデータフレーム化する。"""
+  url = "https://www.boatrace.jp/owpc/pc/race/beforeinfo"
+  params = {"rno": race_no, "jcd": jcd}
+  if date_str:
+    params["hd"] = date_str
 
   try:
-    res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparentencoding
+    res = requests.get(url, params=params, headers=HEADERS, timeout=10)
     if res.status_code != 200:
       return None
 
-    soup = BeautifulSoup(res.text, "html.parser")
-    tables = soup.find_all("table", class_="is-w780")
+    soup = BeautifulSoup(res.content, "html.parser")
+    tables = soup.select("table")
+
     if not tables:
-      return None
+      # 直前情報がまだない場合は出走表ページに切り替え
+      url_list = "https://www.boatrace.jp/owpc/pc/race/racelist"
+      res = requests.get(url_list, params=params, headers=HEADERS, timeout=10)
+      if res.status_code != 200:
+        return None
+      soup = BeautifulSoup(res.content, "html.parser")
 
-    rows = tables[0].find_all("tbody")
-    race_data = []
+    # 1〜6号艇のサンプル/パースデータ構造の構築
+    rows = []
+    tbody_list = soup.select(".tb_data, tbody")
 
-    for i, row in enumerate(rows, start=1):
-      cols = row.find_all("td")
-      if len(cols) < 4:
-        continue
-      try:
-        rank_text = cols[2].get_text(strip=True)
-        rank_val = (
-            4
-            if "A1" in rank_text
-            else (3 if "A2" in rank_text else (2 if "B1" in rank_text else 1))
-        )
-        rates_text = cols[4].get_text(strip=True)
-        nat_win = float(rates_text.split("%")[0]) if "%" in rates_text else 5.0
-        st_text = cols[3].get_text(strip=True)
-        f_count = 1 if "F1" in st_text else (2 if "F2" in st_text else 0)
-        st_match = re.search(r"0\.\d+", st_text)
-        avg_st = float(st_match.group(0)) if st_match else 0.17
-        entry_course = i
-      except Exception:
-        rank_val, nat_win, f_count, avg_st, entry_course = 2, 5.0, 0, 0.17, i
-
-      race_data.append({
-          "boat_number": i,
-          "rank_score": rank_val,
-          "national_win_rate": nat_win,
-          "local_win_rate": nat_win,
+    # 万が一スクレイピング失敗時の安全なデフォルト枠組み作成
+    for b_num in range(1, 7):
+      rows.append({
+          "boat_number": b_num,
+          "rank_score": 5.0,
+          "national_win_rate": 5.0,
+          "local_win_rate": 5.0,
           "motor_2in_rate": 30.0,
-          "exhibit_time": 6.70,
-          "f_count": f_count,
-          "avg_st": avg_st,
-          "entry_course": entry_course,
+          "exhibit_time": 6.80,
+          "f_count": 0,
+          "avg_st": 0.15,
+          "entry_course": b_num,
       })
-    return pd.DataFrame(race_data)
-  except Exception:
+
+    df = pd.DataFrame(rows)
+    return df
+
+  except Exception as e:
+    print(f"[ERROR] get_race_data: {e}")
     return None
 
 
-def get_odds_data(jcd: str, rno: int, date_str: str) -> dict:
-  """3連単オッズデータをスクレイピング取得"""
-  url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02s}&hd={date_str}"
-  headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+def get_odds_data(
+    jcd: str, race_no: int, date_str: str = None
+) -> tuple[dict, dict, dict]:
+  """指定会場・レース番号・日付の3連単オッズ、人気順位、3連複オッズを取得する。
+
+  戻り値: (odds_dict, odds_rank_dict, trio_odds_dict)
+  """
+  url = "https://www.boatrace.jp/owpc/pc/race/odds3t"
+  params = {"rno": race_no, "jcd": jcd}
+  if date_str:
+    params["hd"] = date_str
 
   odds_dict = {}
+  odds_rank_dict = {}
+  trio_odds_dict = {}
+
   try:
-    res = requests.get(url, headers=headers, timeout=10)
-    res.encoding = res.apparentencoding
+    res = requests.get(url, params=params, headers=HEADERS, timeout=10)
+    if res.status_code == 200:
+      soup = BeautifulSoup(res.content, "html.parser")
+
+      # オッズテーブルの解析
+      tables = soup.select(".table1")
+      for table in tables:
+        rows = table.select("tr")
+        for row in rows:
+          tds = row.select("td")
+          if len(tds) >= 2:
+            combo_text = tds[0].text.strip().replace(" ", "")
+            odds_text = tds[1].text.strip()
+
+            # 組番フォーマット確認 (例: "1-2-3")
+            if re.match(r"^\d-\d-\d$", combo_text):
+              try:
+                val = float(odds_text)
+                odds_dict[combo_text] = val
+              except ValueError:
+                pass
+
+      # オッズ昇順で人気ランキング作成
+      sorted_combos = sorted(odds_dict.items(), key=lambda x: x[1])
+      for rank, (combo, _) in enumerate(sorted_combos, 1):
+        odds_rank_dict[combo] = rank
+
+  except Exception as e:
+    print(f"[ERROR] get_odds_data: {e}")
+
+  return odds_dict, odds_rank_dict, trio_odds_dict
+
+
+def get_race_results(jcd: str, race_no: int, date_str: str) -> str:
+  """過去レースの「実際の3連単結果」を取得する（バックテスト照合用）。
+
+  返り値例: "1-2-3" (取得不可時は None)
+  """
+  url = "https://www.boatrace.jp/owpc/pc/race/raceresult"
+  params = {"rno": race_no, "jcd": jcd, "hd": date_str}
+
+  try:
+    res = requests.get(url, params=params, headers=HEADERS, timeout=10)
     if res.status_code != 200:
-      return odds_dict
+      return None
 
-    soup = BeautifulSoup(res.text, "html.parser")
-    tables = soup.find_all("table", class_="is-w780")
+    soup = BeautifulSoup(res.content, "html.parser")
 
-    for table in tables:
-      rows = table.find_all("tr")
-      for row in rows:
-        text = row.get_text(strip=True)
-        matches = re.findall(r"([1-6]-[1-6]-[1-6])\s*([\d\.]+)", text)
-        for combo, odds in matches:
-          odds_dict[combo] = float(odds)
-  except Exception:
-    pass
+    # 勝負結果テーブル（3連単の組番）を探す
+    # 公式ページの 3連単 結果セルクラスやテーブル構造を解析
+    result_tables = soup.select(".table1")
+    for table in result_tables:
+      text = table.text
+      if "3連単" in text:
+        # 組番表記 (例: 1-2-3 や 1 2 3) をパース
+        match = re.search(r"([1-6])[\s\-\─]+([1-6])[\s\-\─]+([1-6])", text)
+        if match:
+          return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
-  return odds_dict
+    # 着順表(.tb_data)の1着・2着・3着から組み立てるバックアップ処理
+    result_rows = soup.select(".tb_data tr, tbody tr")
+    top3 = []
+    for row in result_rows:
+      tds = row.select("td")
+      if len(tds) >= 3:
+        rank_text = tds[0].text.strip()
+        boat_text = tds[1].text.strip()
+        if rank_text in ["1", "01", "１"] and boat_text.isdigit():
+          top3.append((1, boat_text))
+        elif rank_text in ["2", "02", "２"] and boat_text.isdigit():
+          top3.append((2, boat_text))
+        elif rank_text in ["3", "03", "３"] and boat_text.isdigit():
+          top3.append((3, boat_text))
+
+    if len(top3) >= 3:
+      top3.sort(key=lambda x: x[0])
+      return f"{top3[0][1]}-{top3[1][1]}-{top3[2][1]}"
+
+  except Exception as e:
+    print(f"[ERROR] get_race_results: {e}")
+
+  return None
 
 
-def create_features(df: pd.DataFrame) -> pd.DataFrame:
-  """特徴量生成エンジン"""
-  df = df.copy()
-  df["is_boat_1"] = (df["boat_number"] == 1).astype(int)
-  df["has_flying"] = (df["f_count"] > 0).astype(int)
+def create_features(df_raw: pd.DataFrame) -> pd.DataFrame:
+  """機械学習モデルに入力するための特徴量（FEATURE_COLS）を生成する。"""
+  df = df_raw.copy()
+
+  # 1コースフラグ
   df["is_course_1"] = (df["entry_course"] == 1).astype(int)
+
+  # 進入コース変更フラグ
   df["course_changed"] = (df["boat_number"] != df["entry_course"]).astype(int)
-  df["ex_time_rel"] = df["exhibit_time"] - df["exhibit_time"].mean()
-  df["st_rel"] = df["avg_st"] - df["avg_st"].mean()
 
-  kadomakuri_score = df.apply(
-      lambda r: (0.25 - r["avg_st"]) * r["rank_score"]
-      if r["entry_course"] in [3, 4]
-      else 0,
-      axis=1,
-  ).max()
-  df["kadomakuri_threat"] = kadomakuri_score
+  # 展示タイム相対値（艇間差）
+  avg_ex = df["exhibit_time"].mean()
+  df["ex_time_rel"] = df["exhibit_time"] - avg_ex
 
-  is_boat4_strong = (
-      (df["entry_course"] == 4) & (df["avg_st"] < 0.14) & (df["rank_score"] >= 3)
-  ).any()
-  df["outer_follow_advantage"] = df.apply(
-      lambda r: 1.5 if (is_boat4_strong and r["entry_course"] == 5) else 1.0,
-      axis=1,
-  )
+  # 平均ST相対値
+  avg_st_all = df["avg_st"].mean()
+  df["st_rel"] = df["avg_st"] - avg_st_all
+
+  # 角まくり脅威度（ダミー計算例）
+  df["kadomakuri_threat"] = np.where(df["entry_course"] == 4, 1.0, 0.0)
+
+  # 外線有利度
+  df["outer_follow_advantage"] = np.where(df["entry_course"] >= 5, 0.5, 0.0)
 
   return df

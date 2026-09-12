@@ -232,7 +232,7 @@ else:
           for combo, ai_prob in trifecta_probs.items():
             odds = odds_dict.get(combo, 10.0)
             rank = odds_rank_dict.get(combo, "-")
-            
+
             # 3連複オッズの参照（組み合わせソート）
             trio_key = "-".join(sorted(combo.split("-")))
             trio_odds = trio_odds_dict.get(trio_key, 0.0)
@@ -259,18 +259,7 @@ else:
           f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
       )
 
-      cols_order = [
-          "買い目(3連単)",
-          "オッズ(3连単)",
-          "人気(３連単)",
-          "オッズ(3連複)",
-          "AI予測確率(%)",
-          "AI期待値",
-      ]
-      
-      # 互換性のためのカラム名調整
-      df_all_display = df_all.rename(columns={"オッズ(3連単)": "オッズ(3連単)"})
-      df_top5 = df_all_display.sort_values(by="AI期待値", ascending=False).head(5)
+      df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5)
 
       st.dataframe(
           df_top5[
@@ -289,7 +278,7 @@ else:
 
       st.write("---")
 
-      # 2. オッズ100倍以上の大穴予想（従来形式を保持）
+      # 2. オッズ100倍以上の大穴予想
       st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
 
       df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
@@ -330,7 +319,7 @@ else:
 
         df_hole = (
             pd.DataFrame([top_ev_100, random_100, top_prob_100])
-            .drop_duplicates(subset=["買い目(3连単)"])
+            .drop_duplicates(subset=["買い目(3連単)"])
             .drop(columns=["オッズ_num"])
         )
         st.write("")

@@ -307,19 +307,19 @@ else:
 
         with cols_hole[1]:
           st.metric(
-              label="🎲 ランダム一発勝負",
-              value=random_100["買い目"],
-              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
-          )
-
-        with cols_hole[2]:
-          st.metric(
               label="🧠 理論勝率 NO.1",
               value=top_prob_100["買い目"],
               delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率']}",
           )
 
-        df_hole = pd.DataFrame([top_ev_100, random_100, top_prob_100]).drop_duplicates(
+        with cols_hole[2]:
+          st.metric(
+              label="🎲 ランダム一発勝負",
+              value=random_100["買い目"],
+              delta=f"{random_100['オッズ']} / 期待値:{random_100['AI期待値']}",
+          )
+
+        df_hole = pd.DataFrame([top_ev_100, top_prob_100, random_100]).drop_duplicates(
             subset=["買い目"]
         )
         st.write("")

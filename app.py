@@ -3,10 +3,11 @@ import os
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(
-    page_title="AI競艇予想 Webアプリ (順位予想版)", layout="wide"
-)
-st.title("🚤 AI競艇予想 Webアプリ（1・2・3着 順位予想）")
+# ブラウザのタブタイトルを設定
+st.set_page_config(page_title="MYAI_BOATRACE", layout="wide")
+
+# メインのアプリタイトル
+st.title("🚤 MYAI_BOATRACE")
 
 
 @st.cache_data(ttl=600)

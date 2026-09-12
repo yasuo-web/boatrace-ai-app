@@ -1,17 +1,15 @@
-from datetime import datetime
 import json
 import os
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="AI競艇予想 Webアプリ (全自動更新版)", layout="wide"
+    page_title="AI競艇予想 Webアプリ (順位予想版)", layout="wide"
 )
-st.title("🚤 AI競艇予想 Webアプリ（自動更新版）")
+st.title("🚤 AI競艇予想 Webアプリ（1・2・3着 順位予想）")
 
 
-# JSONデータの読み込み
-@st.cache_data(ttl=600)  # 10分キャッシュ
+@st.cache_data(ttl=600)
 def load_predictions():
   if not os.path.exists("latest_predictions.json"):
     return None
@@ -23,7 +21,7 @@ pred_data = load_predictions()
 
 if pred_data is None:
   st.warning(
-      "現在予測データがありません。GitHub Actionsの初回実行をお待ちください。"
+      "現在予測データがありません。GitHub Actionsの実行をお待ちください。"
   )
 else:
   st.caption(f"最終更新日: {pred_data.get('updated_at')}")
@@ -50,19 +48,30 @@ else:
     rno_str = str(selected_rno)
 
     if rno_str in races_available:
-      race_preds = races_available[rno_str]
+      race_info = races_available[rno_str]
+      rank_preds = race_info["ranks"]
+      trifecta_preds = race_info["trifecta"]
 
-      df_result = pd.DataFrame(race_preds)
-      df_result.columns = ["艇番", "予想勝利確率 (%)"]
-      df_result["艇番"] = df_result["艇番"].apply(lambda x: f"{x}号艇")
+      # 表データの作成
+      df_result = pd.DataFrame(rank_preds)
+      df_result["boat"] = df_result["boat"].apply(lambda x: f"{x}号艇")
+      df_result.columns = [
+          "艇番",
+          "1着確率 (%)",
+          "2着確率 (%)",
+          "3着確率 (%)",
+      ]
 
-      st.subheader(f"🎯 {selected_place_name} {selected_rno}R 予想結果")
+      st.subheader(f"🎯 {selected_place_name} {selected_rno}R 着順予測")
       st.dataframe(df_result, hide_index=True, use_container_width=True)
 
-      # 本命・対抗の強調表示
-      top1 = df_result.iloc[0]["艇番"]
-      top2 = df_result.iloc[1]["艇番"]
-      st.success(f"**本命 (◎):** {top1} | **対抗 (○):** {top2}")
+      # 3連単おすすめ買い目の表示
+      st.subheader("💡 AI推奨 3連単買い目（上位5点）")
+      cols = st.columns(5)
+      for idx, (combo, prob) in enumerate(trifecta_preds):
+        with cols[idx]:
+          st.metric(label=f"第{idx+1}予想", value=combo, delta=f"{prob}%")
+
     else:
       st.warning(
           f"{selected_place_name} {selected_rno}R の予測データはありません。"

@@ -13,7 +13,7 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.00", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.01", layout="wide")
 
 
 # --- キャッシュ定義（自動スピナー非表示設定） ---
@@ -29,7 +29,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.00</span>',
+      ' 8px;">v1.01</span>',
       unsafe_allow_html=True,
   )
 
@@ -139,7 +139,6 @@ def generate_sample_predictions():
         "オッズ": f"{odds:.1f}倍",
         "人気": f"{idx + 1}人気",
         "3連複オッズ": f"{t3_odds:.1f}倍",
-        "AI予測確率": f"{ai_prob}%",
         "AI予測確率_num": ai_prob,
         "AI期待値": ev,
         "AI期待値_str": f"{ev:.2f}",
@@ -266,7 +265,6 @@ else:
                 "オッズ": f"{odds:.1f}倍",
                 "人気": f"{rank}人気" if str(rank).isdigit() else "-",
                 "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
-                "AI予測確率": f"{round(ai_prob, 1)}%",
                 "AI予測確率_num": ai_prob,
                 "AI期待値": round(ev, 2),
                 "AI期待値_str": f"{ev:.2f}",
@@ -282,7 +280,6 @@ else:
           "オッズ",
           "人気",
           "3連複オッズ",
-          "AI予測確率",
           "AI期待値",
       ]
 
@@ -330,9 +327,9 @@ else:
 
         with cols_hole[1]:
           st.metric(
-              label="🧠 理論勝率 NO.1",
+              label="🎯 注目買い目",
               value=top_prob_100["買い目"],
-              delta=f"{top_prob_100['オッズ']} / 確率:{top_prob_100['AI予測確率']}",
+              delta=f"{top_prob_100['オッズ']} / 期待値:{top_prob_100['AI期待値_str']}",
           )
 
         with cols_hole[2]:
@@ -359,13 +356,13 @@ else:
 
       st.write("---")
 
-      # 一番下部に指標の解説文を追加
-      st.markdown(
-          "💡 **AI予測確率**："
-          " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
-      )
+      # 一番下部に指標の解説文を追加（期待値を上、予測確率を下に入れ替え）
       st.markdown(
           "💡 **AI期待値**："
           " (AI予測確率 ÷ 100) ×"
           " オッズで算出される購入コストに対する回収見込み（1.00以上が買い価値あり）です。"
+      )
+      st.markdown(
+          "💡 **AI予測確率**："
+          " 過去データと直前情報をもとにAIが算出した、その買い目が的中する確率です。"
       )

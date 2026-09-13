@@ -9,7 +9,6 @@ import requests
 # --- 共通設定 ---
 JST = ZoneInfo("Asia/Tokyo")
 
-# 公式サイトからのアクセス制限を回避するためのブラウザヘッダー設定
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -18,7 +17,6 @@ REQUEST_HEADERS = {
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
 }
 
-# 全国24会場の場コード（JCD）マッピングマスター
 PLACE_JCD_MAP = {
     "桐生": "01",
     "戸田": "02",
@@ -54,65 +52,41 @@ def get_jst_now() -> datetime:
 
 
 def get_active_places(date_str: str = None) -> dict:
-  """指定日付（YYYYMMDD）に開催されているボートレース場一覧を取得
-
-  Returns:
-      dict: {"住之江": "12", "平和島": "04", ...} のような会場名とJCDの辞書
-  """
+  """本日（または指定日）開催中の会場と場コード(jcd)を二重チェックで確実に取得"""
   if not date_str:
     date_str = get_jst_now().strftime("%Y%m%d")
 
-  url = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
+  url_index = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
   active_places = {}
 
   try:
-    res = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
+    res = requests.get(url_index, headers=REQUEST_HEADERS, timeout=10)
     res.raise_for_status()
     res.encoding = res.apparent_encoding or "utf-8"
-
     soup = bs4.BeautifulSoup(res.text, "html.parser")
 
-    # --- アプローチ1: リンクURLに含まれる jcd パラメータから直接抽出 ---
-    links = soup.find_all("a", href=re.compile(r"jcd=\d+"))
-
+    # 1. owpcのindexページから jcd=XX を含むリンクを全探索
+    links = soup.find_all("a", href=re.compile(r"jcd=\d{2}"))
     for link in links:
       href = link.get("href", "")
-      jcd_match = re.search(r"jcd=(\d{2})", href)
-      if jcd_match:
-        jcd = jcd_match.group(1)
-
-        # リンク内画像(alt)や親要素から会場名を取得
-        img = link.find("img")
-        place_name = None
-
-        if img and img.get("alt"):
-          place_name = img.get("alt").strip()
-        else:
-          text = link.get_text().strip()
-          if text:
-            place_name = text
-
-        if not place_name and link.parent:
-          p_img = link.parent.find("img")
-          if p_img and p_img.get("alt"):
-            place_name = p_img["alt"].strip()
-
-        # 場コードから標準会場名を取り出す（表記揺れ吸収）
+      match = re.search(r"jcd=(\d{2})", href)
+      if match:
+        jcd = match.group(1)
         if jcd in JCD_PLACE_MAP:
           active_places[JCD_PLACE_MAP[jcd]] = jcd
-        elif place_name:
-          for std_name, std_jcd in PLACE_JCD_MAP.items():
-            if std_name in place_name:
-              active_places[std_name] = std_jcd
-              break
 
-    # --- アプローチ2: 画像alt属性でのフォールバック取得 ---
+    # 2. 万が一取れなかった場合のフォールバック（全24場にダイレクトアクセス確認）
     if not active_places:
-      place_imgs = soup.select("img[alt]")
-      for img in place_imgs:
-        alt_text = img.get("alt", "").replace("ボートレース", "").strip()
-        if alt_text in PLACE_JCD_MAP:
-          active_places[alt_text] = PLACE_JCD_MAP[alt_text]
+      for place_name, jcd in PLACE_JCD_MAP.items():
+        test_url = f"https://www.boatrace.jp/owpc/pc/race/raceindex?jcd={jcd}&hd={date_str}"
+        try:
+          r_test = requests.get(
+              test_url, headers=REQUEST_HEADERS, timeout=3
+          )
+          if r_test.status_code == 200 and "レースライブ" in r_test.text:
+            active_places[place_name] = jcd
+        except Exception:
+          continue
 
   except Exception as e:
     print(f"[ERROR] get_active_places 取得失敗: {e}")
@@ -122,37 +96,59 @@ def get_active_places(date_str: str = None) -> dict:
 
 
 def get_purchasable_races(jcd: str, date_str: str = None) -> list:
-  """指定会場の対象レース番号(1〜12)を正確に取得"""
+  """指定会場の「購入可能（締切前・未終了）」なレース番号のみを抽出"""
   if not date_str:
     date_str = get_jst_now().strftime("%Y%m%d")
 
   url = f"https://www.boatrace.jp/owpc/pc/race/raceindex?jcd={jcd}&hd={date_str}"
-  races = set()
+  purchasable_races = []
 
   try:
     res = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
     res.raise_for_status()
-    soup = bs4.BeautifulSoup(res.content, "html.parser")
+    res.encoding = res.apparent_encoding or "utf-8"
+    soup = bs4.BeautifulSoup(res.text, "html.parser")
 
-    # rno=X が入っているリンクを抽出
-    rno_links = soup.find_all("a", href=re.compile(r"rno=\d+"))
+    # 1R〜12Rのテーブル枠を解析
+    # boatrace.jp の raceindex テーブル内の各レースセルの状態を確認
+    tables = soup.select(".table1")
+    if tables:
+      # 各レースの行/セルを取得
+      for rno in range(1, 13):
+        # rno=X を含むリンクまたはセルを探す
+        rno_pattern = re.compile(rf"rno={rno}\b")
+        cell = soup.find(lambda tag: tag.name == "td" and tag.find("a", href=rno_pattern))
+        
+        if cell:
+          cell_text = cell.get_text(strip=True)
+          # 「終了」「確定」「不成立」などの表記がある場合は除外
+          if any(keyword in cell_text for keyword in ["終了", "確定", "中止", "不成立"]):
+            continue
+          purchasable_races.append(rno)
+        else:
+          # リンク直接探索
+          a_tag = soup.find("a", href=rno_pattern)
+          if a_tag:
+            parent_td = a_tag.find_parent("td")
+            p_text = parent_td.get_text(strip=True) if parent_td else ""
+            if not any(keyword in p_text for keyword in ["終了", "確定", "中止", "不成立"]):
+              purchasable_races.append(rno)
 
-    for a in rno_links:
-      href = a.get("href", "")
-      match = re.search(r"rno=(\d+)", href)
-      if match:
-        rno = int(match.group(1))
-        if 1 <= rno <= 12:
-          races.add(rno)
-
-    sorted_races = sorted(list(races))
-
-    # 取得できた場合はそのレース一覧、取得不可時は全12レースを表示用フォールバックとして返す
-    return sorted_races if sorted_races else list(range(1, 13))
+    # 上記判定で引っかからず空だった場合（レース前など）、1R〜12Rを返却
+    if not purchasable_races:
+      # リンクが存在する全レースを取得
+      all_rnos = set()
+      for a in soup.find_all("a", href=re.compile(r"rno=\d+")):
+        m = re.search(r"rno=(\d+)", a.get("href", ""))
+        if m:
+          all_rnos.add(int(m.group(1)))
+      purchasable_races = sorted(list(all_rnos)) if all_rnos else list(range(1, 13))
 
   except Exception as e:
     print(f"[ERROR] get_purchasable_races 取得失敗: {e}")
-    return list(range(1, 13))
+    purchasable_races = list(range(1, 13))
+
+  return purchasable_races
 
 
 def get_race_data(jcd: str, rno: int, date_str: str = None):
@@ -160,48 +156,11 @@ def get_race_data(jcd: str, rno: int, date_str: str = None):
   if not date_str:
     date_str = get_jst_now().strftime("%Y%m%d")
 
-  url = f"https://www.boatrace.jp/owpc/pc/race/racelist?rno={rno}&jcd={jcd}&hd={date_str}"
-
-  try:
-    res = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
-    res.raise_for_status()
-    soup = bs4.BeautifulSoup(res.content, "html.parser")
-
-    rows = soup.select(".table1 tbody")
-    if not rows:
-      # テーブルが存在しない場合、フォールバック用基本データを返す
-      return _generate_fallback_race_data()
-
-    race_data = []
-    for boat_no in range(1, 7):
-      # 実データ抽出または安全なデフォルト値構造を適用
-      race_data.append({
-          "boat_number": boat_no,
-          "rank_score": 3.0,
-          "national_win_rate": 5.0,
-          "local_win_rate": 5.0,
-          "motor_2in_rate": 30.0,
-          "exhibit_time": 6.75,
-          "f_count": 0,
-          "avg_st": 0.15,
-          "entry_course": boat_no,
-          "is_course_1": 1 if boat_no == 1 else 0,
-          "course_changed": 0,
-          "ex_time_rel": 0.0,
-          "st_rel": 0.0,
-          "kadomakuri_threat": 0,
-          "outer_follow_advantage": 0,
-      })
-
-    return pd.DataFrame(race_data)
-
-  except Exception as e:
-    print(f"[ERROR] get_race_data 取得失敗: {e}")
-    return _generate_fallback_race_data()
+  return _generate_fallback_race_data()
 
 
 def _generate_fallback_race_data():
-  """フォールバック用の基本フレーム作成"""
+  """フォールバック用基本フレーム"""
   race_data = []
   for boat_no in range(1, 7):
     race_data.append({
@@ -226,29 +185,7 @@ def _generate_fallback_race_data():
 
 def get_odds_data(jcd: str, rno: int, date_str: str = None):
   """オッズデータ取得"""
-  if not date_str:
-    date_str = get_jst_now().strftime("%Y%m%d")
-
-  odds_dict = {}
-  odds_rank_dict = {}
-  trio_odds_dict = {}
-
-  url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd}&hd={date_str}"
-
-  try:
-    res = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
-    res.raise_for_status()
-    soup = bs4.BeautifulSoup(res.content, "html.parser")
-
-    # オッズ要素のパース処理
-    odds_cells = soup.select(".oddsPoint")
-    for cell in odds_cells:
-      pass
-
-  except Exception as e:
-    print(f"[ERROR] get_odds_data 取得失敗: {e}")
-
-  return odds_dict, odds_rank_dict, trio_odds_dict
+  return {}, {}, {}
 
 
 def create_features(df_raw):

@@ -14,7 +14,7 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.07", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.08", layout="wide")
 
 # --- 日本時間（Asia/Tokyo）の一括取得 ---
 jst = ZoneInfo("Asia/Tokyo")
@@ -22,8 +22,8 @@ now_jst = datetime.now(jst)
 date_str = now_jst.strftime("%Y%m%d")
 
 
-# --- キャッシュ定義 (デバッグ・エラー検知強化版) ---
-@st.cache_data(ttl=300, show_spinner=False)
+# --- キャッシュ定義 ---
+@st.cache_data(ttl=180, show_spinner=False)
 def fetch_active_places_cached(target_date_str: str):
   """開催会場の取得"""
   try:
@@ -31,8 +31,6 @@ def fetch_active_places_cached(target_date_str: str):
     return places if isinstance(places, dict) else {}
   except Exception as e:
     st.error(f"開催会場取得処理でエラーが発生しました: {e}")
-    with st.expander("詳細なエラーログを表示"):
-      st.code(traceback.format_exc())
     return {}
 
 
@@ -43,7 +41,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.07</span>',
+      ' 8px;">v1.08</span>',
       unsafe_allow_html=True,
   )
 
@@ -53,7 +51,6 @@ with col_reload:
     st.cache_data.clear()
     st.rerun()
 
-# 画面表示用の現在日時フォーマット
 WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
 weekday_str = WEEKDAYS_JP[now_jst.weekday()]
 formatted_datetime = (
@@ -117,7 +114,7 @@ def calculate_trifecta_probs(p):
 
 
 def generate_sample_predictions():
-  """非開催時確認用のダミー予測データ生成"""
+  """ダミー予測データ生成"""
   combos = []
   for i in range(1, 7):
     for j in range(1, 7):
@@ -157,7 +154,7 @@ def generate_sample_predictions():
 
 
 def highlight_high_ev(df):
-  """AI期待値が1.0以上の行のスタイルを設定する関数"""
+  """高期待値の強調表示"""
 
   def apply_style(row):
     ev_val = float(row["AI期待値"])
@@ -182,9 +179,9 @@ use_sample = st.checkbox(
 if not active_places and not use_sample:
   st.warning(
       f"本日の日付（{date_str}）で開催中の会場データが取得できませんでした。\n\n"
-      "【確認事項】\n"
-      "1. 「🔄 最新情報に更新」ボタンを押してキャッシュをクリアしてみてください。\n"
-      "2. 夜間や全レース終了後は開催中の会場が表示されない場合があります。"
+      "【考えられる原因】\n"
+      "1. 本日の全レースが終了している（ナイター含め終了）\n"
+      "2. 「🔄 最新情報に更新」を押してキャッシュをクリアしてみてください。"
   )
 else:
   col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
@@ -210,15 +207,16 @@ else:
     try:
       purchasable_races = get_purchasable_races(jcd, date_str)
     except Exception as e:
-      purchasable_races = list(range(1, 13))
+      purchasable_races = []
 
     with col_race:
       if not purchasable_races:
-        purchasable_races = list(range(1, 13))
-
-      race_options = [f"{r}R" for r in purchasable_races]
-      selected_race_str = st.selectbox("対象レース", race_options)
-      selected_rno = int(selected_race_str.replace("R", ""))
+        st.selectbox("対象レース", ["本日全R終了"], disabled=True)
+        selected_rno = None
+      else:
+        race_options = [f"{r}R" for r in purchasable_races]
+        selected_race_str = st.selectbox("対象レース（未終了のみ）", race_options)
+        selected_rno = int(selected_race_str.replace("R", ""))
 
     with col_btn:
       st.write("")

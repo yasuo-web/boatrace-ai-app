@@ -11,18 +11,16 @@ from scraper import (
     PLACE_JCD_MAP,
     check_race_time_status,
     create_features,
-    get_active_places,
     get_odds_data,
     get_purchasable_races,
     get_race_data,
 )
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.11", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.12", layout="wide")
 
 jst = ZoneInfo("Asia/Tokyo")
 now_jst = datetime.now(jst)
 date_str = now_jst.strftime("%Y%m%d")
-
 
 # --- ヘッダー ---
 col_title, col_reload = st.columns([4, 1])
@@ -30,7 +28,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.11</span>',
+      ' 8px;">v1.12</span>',
       unsafe_allow_html=True,
   )
 
@@ -115,7 +113,7 @@ def generate_sample_predictions():
         "オッズ_num": odds,
         "オッズ": f"{odds:.1f}倍",
         "人気": f"{idx + 1}人気",
-        "3连複オッズ": f"{round(odds * 0.25, 1)}倍",
+        "3連複オッズ": f"{round(odds * 0.25, 1)}倍",
         "AI予測確率_num": ai_prob,
         "AI期待値": ev,
         "AI期待値_str": f"{ev:.2f}",
@@ -133,50 +131,30 @@ def highlight_high_ev(df):
   return df.style.apply(apply_style, axis=1)
 
 
-# --- 会場選択セクション（安定化重視設計） ---
+# --- 会場・レース選択セクション（全24会場直接表示） ---
 st.write("---")
 
-# デフォルトは24会場マップを即座に利用（初期表示で外部通信を行わない）
-places_map = PLACE_JCD_MAP
-
-filter_active = st.checkbox("🔍 本日開催中の会場のみ自動絞り込み（試行）")
-
-if filter_active:
-  with st.spinner("開催中の会場をチェック中..."):
-    try:
-      fetched = get_active_places(date_str)
-      if isinstance(fetched, dict) and len(fetched) > 0:
-        places_map = fetched
-      else:
-        st.warning(
-            "開催会場の自動取得に失敗したため、全会場を表示しています。"
-        )
-    except Exception as e:
-      st.warning(
-          f"会場取得中にエラーが発生しました ({e})。全会場を表示します。"
-      )
-
-col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
+col_place, col_race, col_btn = st.columns([2, 2, 2])
 
 with col_place:
-  selected_place = st.selectbox("開催会場", list(places_map.keys()))
-  jcd = places_map[selected_place]
-
-# 対象レースの取得（失敗時は即座に1〜12Rを表示）
-purchasable_races = []
-try:
-  purchasable_races = get_purchasable_races(jcd, date_str)
-except Exception:
-  purchasable_races = list(range(1, 13))
+  selected_place = st.selectbox("開催会場", list(PLACE_JCD_MAP.keys()))
+  jcd = PLACE_JCD_MAP[selected_place]
 
 with col_race:
-  if not purchasable_races:
-    race_options = [f"{r}R" for r in range(1, 13)]
-  else:
-    race_options = [f"{r}R" for r in purchasable_races]
-
+  race_options = [f"{r}R" for r in range(1, 13)]
   selected_race_str = st.selectbox("対象レース", race_options)
   selected_rno = int(selected_race_str.replace("R", ""))
+
+# 選択されたレースの開催状態を高速事前チェック
+time_status = {"is_active": True, "is_within_3min": False, "is_ended": False}
+try:
+  time_status = check_race_time_status(jcd, selected_rno, date_str)
+except Exception:
+  pass
+
+is_invalid_race = not time_status.get(
+    "is_active", True
+) or time_status.get("is_ended", False)
 
 with col_btn:
   st.write("")
@@ -185,173 +163,200 @@ with col_btn:
       "🎯 決定（予想実行）",
       type="primary",
       use_container_width=True,
-      disabled=(selected_rno is None),
+      disabled=is_invalid_race,
   )
+
+# 未開催・終了レース時の警告表示
+if is_invalid_race:
+  st.error("⚠️ このレースは現在開催されていないか、終了しています。")
+elif time_status.get("is_within_3min", False):
+  st.warning("⚠️ 締切3分前を過ぎているため、予測できません。")
 
 st.write("---")
 
 # --- 予測実行処理 ---
-if submit_btn and selected_rno is not None:
-  # 1. 締切3分前チェック
-  time_status = {"is_within_3min": False}
-  try:
-    time_status = check_race_time_status(jcd, selected_rno, date_str)
-  except Exception:
-    pass
+if submit_btn and not is_invalid_race:
+  # 処理ステップをリアルタイム表示するステータスコンテナ
+  with st.status(
+      f"📊 {selected_place} {selected_rno}R のデータを取得解析中...",
+      expanded=True,
+  ) as status:
 
-  if time_status.get("is_within_3min", False):
-    st.error("⚠️ 締切時間が3分前を過ぎているので、AI予測できません。")
-  else:
-    with st.spinner(
-        f"📊 {selected_place} {selected_rno}R"
-        " のリアルタイムオッズ・直前情報を解析中..."
-    ):
-      try:
-        df_raw = get_race_data(jcd, selected_rno, date_str)
-        has_exhibit_info = df_raw.attrs.get("has_exhibit_time", False)
+    try:
+      # Step 1: 出走表・直前情報の取得
+      status.update(
+          label=(
+              f"🌐 [1/3] {selected_place} {selected_rno}R"
+              " 出走表・展示タイム（直前情報）を取得中..."
+          )
+      )
+      df_raw = get_race_data(jcd, selected_rno, date_str)
+      has_exhibit_info = df_raw.attrs.get("has_exhibit_time", False)
 
-        # 2. 直前情報判定
-        if not has_exhibit_info:
-          st.warning(
-              "⚠️ 直前情報未取得（展示タイム等がまだ発表されていません）。"
+      if not has_exhibit_info:
+        status.update(
+            label="⚠️ 直前情報未発表", state="error", expanded=True
+        )
+        st.warning(
+            "⚠️ 直前情報未取得（展示タイムやスタート展示がまだ発表されていません）。発表後に再度お試しください。"
+        )
+      else:
+        # Step 2: オッズデータの取得
+        status.update(
+            label=(
+                f"📈 [2/3] {selected_place} {selected_rno}R"
+                " リアルタイムオッズを取得中..."
+            )
+        )
+        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+            jcd, selected_rno, date_str
+        )
+
+        if not odds_dict:
+          status.update(
+              label="❌ オッズ取得失敗", state="error", expanded=True
+          )
+          st.error(
+              "オッズデータの取得に失敗しました。時間をおいて再実行してください。"
           )
         else:
-          odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
-              jcd, selected_rno, date_str
+          # Step 3: AIモデル推論
+          status.update(
+              label="🧠 [3/3] AIモデルで期待値・特徴量を計算中..."
+          )
+          df_features = create_features(df_raw)
+          probs = (
+              model.predict_proba(df_features[FEATURE_COLS])[:, 1]
+              if model
+              else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
+          )
+          trifecta_probs = calculate_trifecta_probs(probs)
+
+          predictions = []
+          for combo, ai_prob in trifecta_probs.items():
+            odds = odds_dict.get(combo, 10.0)
+            rank = odds_rank_dict.get(combo, "-")
+            trio_key = "-".join(sorted(combo.split("-")))
+            trio_odds = trio_odds_dict.get(trio_key, 0.0)
+
+            ev = (ai_prob / 100) * odds
+
+            predictions.append({
+                "買い目": combo,
+                "オッズ_num": odds,
+                "オッズ": f"{odds:.1f}倍",
+                "人気": f"{rank}人気" if str(rank).isdigit() else "-",
+                "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
+                "AI予測確率_num": ai_prob,
+                "AI期待値": round(ev, 2),
+                "AI期待値_str": f"{ev:.2f}",
+            })
+
+          df_all = pd.DataFrame(predictions)
+
+          # 全ステップ完了
+          status.update(
+              label="✅ 解析が完了しました！", state="complete", expanded=False
           )
 
-          if not odds_dict:
-            st.error("オッズデータの取得に失敗しました。")
+          st.toast(
+              "✅ 最新オッズとAI予想結果を出力しました！", icon="🎉"
+          )
+
+          DISPLAY_COLS = [
+              "買い目",
+              "オッズ",
+              "人気",
+              "3連複オッズ",
+              "AI期待値",
+          ]
+
+          st.subheader(
+              f"🏆 {selected_place} {selected_rno}R AI厳選買い目(上位5点)"
+          )
+          df_top5 = (
+              df_all.sort_values(by="AI期待値", ascending=False).head(5).copy()
+          )
+          df_top5["AI期待値"] = df_top5["AI期待値_str"]
+
+          st.dataframe(
+              highlight_high_ev(df_top5[DISPLAY_COLS]),
+              hide_index=True,
+              use_container_width=True,
+          )
+
+          st.write("---")
+
+          st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
+          df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
+
+          if df_100plus.empty:
+            st.info(
+                "※現在、このレースにはオッズ100倍以上の買い目が存在しません。"
+            )
           else:
-            df_features = create_features(df_raw)
-            probs = (
-                model.predict_proba(df_features[FEATURE_COLS])[:, 1]
-                if model
-                else [0.3, 0.2, 0.2, 0.1, 0.1, 0.1]
-            )
-            trifecta_probs = calculate_trifecta_probs(probs)
+            top_ev_100 = df_100plus.sort_values(
+                by="AI期待値", ascending=False
+            ).iloc[0]
+            top_prob_100 = df_100plus.sort_values(
+                by="AI予測確率_num", ascending=False
+            ).iloc[0]
+            random_100 = df_100plus.sample(n=1).iloc[0]
 
-            predictions = []
-            for combo, ai_prob in trifecta_probs.items():
-              odds = odds_dict.get(combo, 10.0)
-              rank = odds_rank_dict.get(combo, "-")
-              trio_key = "-".join(sorted(combo.split("-")))
-              trio_odds = trio_odds_dict.get(trio_key, 0.0)
+            cols_hole = st.columns(3)
+            with cols_hole[0]:
+              st.metric(
+                  label="🔥 高期待値 NO.1",
+                  value=top_ev_100["買い目"],
+                  delta=(
+                      f"{top_ev_100['オッズ']} /"
+                      f" 期待値:{top_ev_100['AI期待値_str']}"
+                  ),
+              )
+            with cols_hole[1]:
+              st.metric(
+                  label="🎯 注目買い目",
+                  value=top_prob_100["買い目"],
+                  delta=(
+                      f"{top_prob_100['オッズ']} /"
+                      f" 期待値:{top_prob_100['AI期待値_str']}"
+                  ),
+              )
+            with cols_hole[2]:
+              st.metric(
+                  label="🎲 ランダム一発勝負",
+                  value=random_100["買い目"],
+                  delta=(
+                      f"{random_100['オッズ']} /"
+                      f" 期待値:{random_100['AI期待値_str']}"
+                  ),
+              )
 
-              ev = (ai_prob / 100) * odds
-
-              predictions.append({
-                  "買い目": combo,
-                  "オッズ_num": odds,
-                  "オッズ": f"{odds:.1f}倍",
-                  "人気": f"{rank}人気" if str(rank).isdigit() else "-",
-                  "3連複オッズ": f"{trio_odds:.1f}倍" if trio_odds > 0 else "-",
-                  "AI予測確率_num": ai_prob,
-                  "AI期待値": round(ev, 2),
-                  "AI期待値_str": f"{ev:.2f}",
-              })
-
-            df_all = pd.DataFrame(predictions)
-
-            st.toast(
-                "✅ 最新オッズとAI予想結果を出力しました！", icon="🎉"
-            )
-
-            DISPLAY_COLS = [
-                "買い目",
-                "オッズ",
-                "人気",
-                "3連複オッズ",
-                "AI期待値",
-            ]
-
-            st.subheader(
-                f"🏆 {selected_place} {selected_rno}R AI厳選買い目(上位5点)"
-            )
-            df_top5 = (
-                df_all.sort_values(by="AI期待値", ascending=False)
-                .head(5)
+            df_hole = (
+                pd.DataFrame([top_ev_100, top_prob_100, random_100])
+                .drop_duplicates(subset=["買い目"])
                 .copy()
             )
-            df_top5["AI期待値"] = df_top5["AI期待値_str"]
+            df_hole["AI期待値"] = df_hole["AI期待値_str"]
 
+            st.write("")
             st.dataframe(
-                highlight_high_ev(df_top5[DISPLAY_COLS]),
+                highlight_high_ev(df_hole[DISPLAY_COLS]),
                 hide_index=True,
                 use_container_width=True,
             )
 
-            st.write("---")
-
-            st.subheader("💥 万舟・高配当狙い（オッズ100倍以上限定）")
-            df_100plus = df_all[df_all["オッズ_num"] >= 100.0]
-
-            if df_100plus.empty:
-              st.info(
-                  "※現在、このレースにはオッズ100倍以上の買い目が存在しません。"
-              )
-            else:
-              top_ev_100 = df_100plus.sort_values(
-                  by="AI期待値", ascending=False
-              ).iloc[0]
-              top_prob_100 = df_100plus.sort_values(
-                  by="AI予測確率_num", ascending=False
-              ).iloc[0]
-              random_100 = df_100plus.sample(n=1).iloc[0]
-
-              cols_hole = st.columns(3)
-              with cols_hole[0]:
-                st.metric(
-                    label="🔥 高期待値 NO.1",
-                    value=top_ev_100["買い目"],
-                    delta=(
-                        f"{top_ev_100['オッズ']} /"
-                        f" 期待値:{top_ev_100['AI期待値_str']}"
-                    ),
-                )
-              with cols_hole[1]:
-                st.metric(
-                    label="🎯 注目買い目",
-                    value=top_prob_100["買い目"],
-                    delta=(
-                        f"{top_prob_100['オッズ']} /"
-                        f" 期待値:{top_prob_100['AI期待値_str']}"
-                    ),
-                )
-              with cols_hole[2]:
-                st.metric(
-                    label="🎲 ランダム一発勝負",
-                    value=random_100["買い目"],
-                    delta=(
-                        f"{random_100['オッズ']} /"
-                        f" 期待値:{random_100['AI期待値_str']}"
-                    ),
-                )
-
-              df_hole = (
-                  pd.DataFrame([top_ev_100, top_prob_100, random_100])
-                  .drop_duplicates(subset=["買い目"])
-                  .copy()
-              )
-              df_hole["AI期待値"] = df_hole["AI期待値_str"]
-
-              st.write("")
-              st.dataframe(
-                  highlight_high_ev(df_hole[DISPLAY_COLS]),
-                  hide_index=True,
-                  use_container_width=True,
-              )
-
-            st.write("---")
-            st.markdown(
-                "💡 **AI期待値**："
-                " (AI予測確率 ÷ 100) ×"
-                " オッズで算出される購入コストに対する回収見込み（1.00以上が買い価値あり）です。"
-            )
-      except Exception as e:
-        st.error(
-            f"データ取得または解析中にエラーが発生しました: {e}"
-        )
+          st.write("---")
+          st.markdown(
+              "💡 **AI期待値**："
+              " (AI予測確率 ÷ 100) ×"
+              " オッズで算出される購入コストに対する回収見込み（1.00以上が買い価値あり）です。"
+          )
+    except Exception as e:
+      status.update(
+          label="❌ エラーが発生しました", state="error", expanded=True
+      )
+      st.error(f"データ取得または解析中にエラーが発生しました: {e}")
 
 # --- ページ最下部：サンプルデータデモ表示 ---
 st.write("---")

@@ -14,29 +14,28 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.09", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.10", layout="wide")
 
 jst = ZoneInfo("Asia/Tokyo")
 now_jst = datetime.now(jst)
 date_str = now_jst.strftime("%Y%m%d")
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False)
 def fetch_active_places_cached(target_date_str: str):
   try:
     places = get_active_places(target_date_str)
     return places if isinstance(places, dict) else {}
   except Exception as e:
-    st.error(f"会場データ取得中にエラーが発生しました: {e}")
     return {}
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_purchasable_races_cached(jcd: str, target_date_str: str):
   try:
     return get_purchasable_races(jcd, target_date_str)
   except Exception:
-    return []
+    return list(range(1, 13))
 
 
 # --- ヘッダー ---
@@ -45,7 +44,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.09</span>',
+      ' 8px;">v1.10</span>',
       unsafe_allow_html=True,
   )
 
@@ -148,7 +147,7 @@ def highlight_high_ev(df):
   return df.style.apply(apply_style, axis=1)
 
 
-# --- 開催会場の取得 ---
+# --- 会場データ取得 ---
 with st.spinner("現在開催中の会場を取得中..."):
   active_places = fetch_active_places_cached(date_str)
 
@@ -156,9 +155,8 @@ st.write("---")
 
 if not active_places:
   st.warning(
-      f"本日の日付（{date_str}）で開催中の会場データが取得できませんでした。\n\n"
-      "・本日開催予定の全レースが終了している可能性があります。\n"
-      "・「🔄 最新情報に更新」ボタンを押して再読み込みをお試しください。"
+      f"本日の日付（{date_str}）で開催中の会場データが自動取得できませんでした。\n\n"
+      "・「🔄 最新情報に更新」ボタンを押して再接続をお試しください。"
   )
 else:
   col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
@@ -167,13 +165,12 @@ else:
     selected_place = st.selectbox("開催会場", list(active_places.keys()))
     jcd = active_places[selected_place]
 
-  # 会場選択時にプログレスメッセージを表示
-  with st.spinner(f"⏳ {selected_place}の開催中レースを取得中..."):
+  with st.spinner(f"⏳ {selected_place}の対象レースを取得中..."):
     purchasable_races = fetch_purchasable_races_cached(jcd, date_str)
 
   with col_race:
     if not purchasable_races:
-      st.selectbox("対象レース", ["本日全R終了"], disabled=True)
+      st.selectbox("対象レース", ["全R終了"], disabled=True)
       selected_rno = None
     else:
       race_options = [f"{r}R" for r in purchasable_races]
@@ -193,7 +190,7 @@ else:
   st.write("---")
 
   if submit_btn and selected_rno is not None:
-    # 1. 締切時刻判定 (締切3分前チェック)
+    # 1. 締切3分前チェック
     time_status = check_race_time_status(jcd, selected_rno, date_str)
 
     if time_status["is_within_3min"]:
@@ -208,7 +205,7 @@ else:
         df_raw = get_race_data(jcd, selected_rno, date_str)
         has_exhibit_info = df_raw.attrs.get("has_exhibit_time", False)
 
-        # 2. 展示タイムなどの直前情報チェック
+        # 2. 直前情報判定
         if not has_exhibit_info:
           st.warning(
               "⚠️ 直前情報未取得（展示タイム等がまだ発表されていません）。"
@@ -345,7 +342,7 @@ else:
                 " オッズで算出される購入コストに対する回収見込み（1.00以上が買い価値あり）です。"
             )
 
-# --- ページ最下部：サンプルデータ確認エリア ---
+# --- ページ最下部：サンプルデータデモ表示 ---
 st.write("---")
 st.write("")
 use_sample = st.checkbox(

@@ -1,3 +1,4 @@
+import concurrent.futures
 from datetime import datetime
 import pickle
 import random
@@ -26,19 +27,24 @@ date_str = now_jst.strftime("%Y%m%d")
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_active_places_cached(target_date_str: str):
-  try:
-    places = get_active_places(target_date_str)
-    return places if isinstance(places, dict) else {}
-  except Exception as e:
-    return {}
+  # 10秒以内に応答がない場合はタイムアウトとし、空の辞書を返して手動選択にフォールバックする
+  with concurrent.futures.ThreadPoolExecutor() as executor:
+    future = executor.submit(get_active_places, target_date_str)
+    try:
+      places = future.result(timeout=10)
+      return places if isinstance(places, dict) else {}
+    except Exception:
+      return {}
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_purchasable_races_cached(jcd: str, target_date_str: str):
-  try:
-    return get_purchasable_races(jcd, target_date_str)
-  except Exception:
-    return list(range(1, 13))
+  with concurrent.futures.ThreadPoolExecutor() as executor:
+    future = executor.submit(get_purchasable_races, jcd, target_date_str)
+    try:
+      return future.result(timeout=10)
+    except Exception:
+      return list(range(1, 13))
 
 
 # --- ヘッダー ---
@@ -156,10 +162,10 @@ with st.spinner("現在開催中の会場を取得中..."):
 
 st.write("---")
 
-# 万が一自動取得に失敗した場合は全24会場を選択可能にするフォールバック
+# 自動取得失敗時またはタイムアウト時は全24会場を選択可能にするフォールバック
 if not active_places:
   st.warning(
-      "⚠️ 開催会場の自動判定を行えなかったため、全会場を表示しています。\n"
+      "⚠️ 開催会場の自動取得に失敗（またはタイムアウト）したため、全会場を表示しています。\n"
       "目的の会場を選択して予想を実行してください。"
   )
   active_places = PLACE_JCD_MAP
@@ -175,7 +181,6 @@ with st.spinner(f"⏳ {selected_place}の対象レースを取得中..."):
 
 with col_race:
   if not purchasable_races:
-    # 対象レースが空の場合でも選択できるよう1~12Rを予備表示
     race_options = [f"{r}R" for r in range(1, 13)]
   else:
     race_options = [f"{r}R" for r in purchasable_races]

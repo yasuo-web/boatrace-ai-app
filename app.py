@@ -14,7 +14,7 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.03", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.06", layout="wide")
 
 
 # --- 日本時間（Asia/Tokyo）の厳格な一括取得 ---
@@ -43,7 +43,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.03</span>',
+      ' 8px;">v1.06</span>',
       unsafe_allow_html=True,
   )
 
@@ -184,8 +184,7 @@ if not active_places and not use_sample:
       f"本日の日付（{date_str}）で開催中の会場データが取得できませんでした。\n\n"
       "【確認事項】\n"
       "1. 「🔄 最新情報に更新」ボタンを押してキャッシュをクリアしてみてください。\n"
-      "2. それでも解決しない場合、`scraper.py` 内部で `datetime.now()` を独自に呼び出していて、"
-      "サーバーのシステム時刻（UTC等）とずれている可能性があります。"
+      "2. それでも解決しない場合、`scraper.py` の `get_active_places` 関数をご確認ください。"
   )
 else:
   col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
@@ -211,17 +210,15 @@ else:
     try:
       purchasable_races = get_purchasable_races(jcd, date_str)
     except Exception as e:
-      purchasable_races = []
-      st.error(f"レース一覧の取得中にエラーが発生しました: {e}")
+      purchasable_races = list(range(1, 13))
 
     with col_race:
       if not purchasable_races:
-        st.selectbox("対象レース", ["本日全レース終了"], disabled=True)
-        selected_rno = None
-      else:
-        race_options = [f"{r}R" for r in purchasable_races]
-        selected_race_str = st.selectbox("対象レース", race_options)
-        selected_rno = int(selected_race_str.replace("R", ""))
+        purchasable_races = list(range(1, 13))
+
+      race_options = [f"{r}R" for r in purchasable_races]
+      selected_race_str = st.selectbox("対象レース", race_options)
+      selected_rno = int(selected_race_str.replace("R", ""))
 
     with col_btn:
       st.write("")

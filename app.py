@@ -1,6 +1,7 @@
 from datetime import datetime
 import pickle
 import random
+import traceback
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
@@ -13,13 +14,26 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.01", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.03", layout="wide")
 
 
-# --- キャッシュ定義（自動スピナー非表示設定） ---
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_active_places_cached(date_str: str):
-  return get_active_places(date_str)
+# --- 日本時間（Asia/Tokyo）の厳格な一括取得 ---
+jst = ZoneInfo("Asia/Tokyo")
+now_jst = datetime.now(jst)
+date_str = now_jst.strftime("%Y%m%d")  # スクレイピングAPIに渡す共通日付コード
+
+
+# --- キャッシュ定義 ---
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_active_places_cached(target_date_str: str):
+  """開催会場の取得（JST日付フォーマットを明示して渡す）"""
+  try:
+    places = get_active_places(target_date_str)
+    return places if isinstance(places, dict) else {}
+  except Exception as e:
+    st.error(f"開催会場取得処理でエラーが発生しました: {e}")
+    st.caption(f"デバッグ詳細: {traceback.format_exc()}")
+    return {}
 
 
 # --- ヘッダーエリア ---
@@ -29,7 +43,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.01</span>',
+      ' 8px;">v1.03</span>',
       unsafe_allow_html=True,
   )
 
@@ -39,11 +53,7 @@ with col_reload:
     st.cache_data.clear()
     st.rerun()
 
-# 日本時間（Asia/Tokyo）の取得と表示フォーマット設定
-jst = ZoneInfo("Asia/Tokyo")
-now_jst = datetime.now(jst)
-date_str = now_jst.strftime("%Y%m%d")
-
+# 画面表示用の現在日時フォーマット
 WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
 weekday_str = WEEKDAYS_JP[now_jst.weekday()]
 formatted_datetime = (
@@ -152,9 +162,7 @@ def highlight_high_ev(df):
   def apply_style(row):
     ev_val = float(row["AI期待値"])
     if ev_val >= 1.0:
-      return [
-          "color: #ff4b4b; font-weight: bold;" for _ in range(len(row))
-      ]  # 赤字＋太字
+      return ["color: #ff4b4b; font-weight: bold;" for _ in range(len(row))]
     return [""] * len(row)
 
   return df.style.apply(apply_style, axis=1)
@@ -173,8 +181,11 @@ use_sample = st.checkbox(
 
 if not active_places and not use_sample:
   st.warning(
-      "現在開催中の会場がないか、本日のレース日程が終了している可能性があります。"
-      "（※表示確認は上の「サンプルデータで表示結果を確認する」をチェックしてください）"
+      f"本日の日付（{date_str}）で開催中の会場データが取得できませんでした。\n\n"
+      "【確認事項】\n"
+      "1. 「🔄 最新情報に更新」ボタンを押してキャッシュをクリアしてみてください。\n"
+      "2. それでも解決しない場合、`scraper.py` 内部で `datetime.now()` を独自に呼び出していて、"
+      "サーバーのシステム時刻（UTC等）とずれている可能性があります。"
   )
 else:
   col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
@@ -197,7 +208,11 @@ else:
       selected_place = st.selectbox("開催会場", list(active_places.keys()))
       jcd = active_places[selected_place]
 
-    purchasable_races = get_purchasable_races(jcd, date_str)
+    try:
+      purchasable_races = get_purchasable_races(jcd, date_str)
+    except Exception as e:
+      purchasable_races = []
+      st.error(f"レース一覧の取得中にエラーが発生しました: {e}")
 
     with col_race:
       if not purchasable_races:
@@ -229,10 +244,14 @@ else:
       with st.spinner(
           f"{display_place_name} {display_race_no}R の最新データ・オッズを取得中..."
       ):
-        df_raw = get_race_data(jcd, display_race_no, date_str)
-        odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
-            jcd, display_race_no, date_str
-        )
+        try:
+          df_raw = get_race_data(jcd, display_race_no, date_str)
+          odds_dict, odds_rank_dict, trio_odds_dict = get_odds_data(
+              jcd, display_race_no, date_str
+          )
+        except Exception as e:
+          st.error(f"データ取得中にエラーが発生しました: {e}")
+          df_raw = None
 
         if df_raw is None or df_raw.empty:
           st.error(
@@ -253,7 +272,6 @@ else:
             odds = odds_dict.get(combo, 10.0)
             rank = odds_rank_dict.get(combo, "-")
 
-            # 3連複オッズの参照（組み合わせソート）
             trio_key = "-".join(sorted(combo.split("-")))
             trio_odds = trio_odds_dict.get(trio_key, 0.0)
 
@@ -291,7 +309,6 @@ else:
       df_top5 = df_all.sort_values(by="AI期待値", ascending=False).head(5).copy()
       df_top5["AI期待値"] = df_top5["AI期待値_str"]
 
-      # 期待値1.0以上のハイライトを適用して表示
       st.dataframe(
           highlight_high_ev(df_top5[DISPLAY_COLS]),
           hide_index=True,
@@ -347,7 +364,6 @@ else:
         df_hole["AI期待値"] = df_hole["AI期待値_str"]
 
         st.write("")
-        # 期待値1.0以上のハイライトを適用して表示
         st.dataframe(
             highlight_high_ev(df_hole[DISPLAY_COLS]),
             hide_index=True,
@@ -356,7 +372,6 @@ else:
 
       st.write("---")
 
-      # 一番下部に指標の解説文を追加（期待値を上、予測確率を下に入れ替え）
       st.markdown(
           "💡 **AI期待値**："
           " (AI予測確率 ÷ 100) ×"

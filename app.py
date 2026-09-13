@@ -14,25 +14,25 @@ from scraper import (
 )
 import streamlit as st
 
-st.set_page_config(page_title="MYAI_BOATRACE v1.06", layout="wide")
+st.set_page_config(page_title="MYAI_BOATRACE v1.07", layout="wide")
 
-
-# --- 日本時間（Asia/Tokyo）の厳格な一括取得 ---
+# --- 日本時間（Asia/Tokyo）の一括取得 ---
 jst = ZoneInfo("Asia/Tokyo")
 now_jst = datetime.now(jst)
-date_str = now_jst.strftime("%Y%m%d")  # スクレイピングAPIに渡す共通日付コード
+date_str = now_jst.strftime("%Y%m%d")
 
 
-# --- キャッシュ定義 ---
-@st.cache_data(ttl=1800, show_spinner=False)
+# --- キャッシュ定義 (デバッグ・エラー検知強化版) ---
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_active_places_cached(target_date_str: str):
-  """開催会場の取得（JST日付フォーマットを明示して渡す）"""
+  """開催会場の取得"""
   try:
     places = get_active_places(target_date_str)
     return places if isinstance(places, dict) else {}
   except Exception as e:
     st.error(f"開催会場取得処理でエラーが発生しました: {e}")
-    st.caption(f"デバッグ詳細: {traceback.format_exc()}")
+    with st.expander("詳細なエラーログを表示"):
+      st.code(traceback.format_exc())
     return {}
 
 
@@ -43,7 +43,7 @@ with col_title:
   st.markdown(
       '<h1 style="display: inline;">🚤 MYAI_BOATRACE </h1>'
       '<span style="font-size: 1.2rem; color: #888888; margin-left:'
-      ' 8px;">v1.06</span>',
+      ' 8px;">v1.07</span>',
       unsafe_allow_html=True,
   )
 
@@ -184,7 +184,7 @@ if not active_places and not use_sample:
       f"本日の日付（{date_str}）で開催中の会場データが取得できませんでした。\n\n"
       "【確認事項】\n"
       "1. 「🔄 最新情報に更新」ボタンを押してキャッシュをクリアしてみてください。\n"
-      "2. それでも解決しない場合、`scraper.py` の `get_active_places` 関数をご確認ください。"
+      "2. 夜間や全レース終了後は開催中の会場が表示されない場合があります。"
   )
 else:
   col_place, col_race, col_btn, _ = st.columns([2, 2, 2, 4])
@@ -298,7 +298,7 @@ else:
           "AI期待値",
       ]
 
-      # 1. AI厳選買い目（上位5点表表示）
+      # 1. AI厳選買い目（上位5点表示）
       st.subheader(
           f"🏆 {display_place_name} {display_race_no}R AI厳選買い目(上位5点)"
       )

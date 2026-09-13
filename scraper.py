@@ -1,6 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
-import traceback
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -8,7 +7,6 @@ import requests
 
 JST = ZoneInfo("Asia/Tokyo")
 
-# ブラウザ相当のリクエストヘッダー
 REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -18,7 +16,7 @@ REQUEST_HEADERS = {
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
-    "Referer": "https://www.boatrace.jp/owpc/pc/race/index",
+    "Referer": "https://www.boatrace.jp/",
 }
 
 PLACE_JCD_MAP = {
@@ -59,7 +57,7 @@ def fetch_url(url: str, retries: int = 2) -> str:
   session = requests.Session()
   for attempt in range(retries + 1):
     try:
-      res = session.get(url, headers=REQUEST_HEADERS, timeout=8)
+      res = session.get(url, headers=REQUEST_HEADERS, timeout=6)
       if res.status_code == 200:
         res.encoding = res.apparent_encoding or "utf-8"
         return res.text
@@ -70,35 +68,50 @@ def fetch_url(url: str, retries: int = 2) -> str:
 
 
 def get_active_places(date_str: str = None) -> dict:
-  """開催会場一覧を確実に取得"""
+  """開催会場一覧を複数ルートで超堅牢に取得"""
   if not date_str:
     date_str = get_jst_now().strftime("%Y%m%d")
 
-  url = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
-  html = fetch_url(url)
   active_places = {}
 
-  if not html:
-    return active_places
+  # --- Route 1: 当日 index ページからの抽出 ---
+  url_index = f"https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
+  html_index = fetch_url(url_index)
 
-  soup = BeautifulSoup(html, "html.parser")
-
-  # 1. アンカータグからのjcd抽出
-  links = soup.find_all("a", href=re.compile(r"jcd=\d{2}"))
-  for link in links:
-    href = link.get("href", "")
-    match = re.search(r"jcd=(\d{2})", href)
-    if match:
-      jcd = match.group(1)
+  if html_index:
+    # URL内の jcd=XX または jcd=X を全網羅抽出
+    found_jcds = set(re.findall(r"jcd=(\d{2})", html_index))
+    for jcd in found_jcds:
       if jcd in JCD_PLACE_MAP:
         active_places[JCD_PLACE_MAP[jcd]] = jcd
 
-  # 2. 画像alt・クラス・テキストからのフォールバック抽出
+  # --- Route 2: 月間スケジュール(monthlyschedule)からのバックアップ抽出 ---
   if not active_places:
-    for img in soup.find_all("img", alt=True):
-      alt_txt = img["alt"].replace("ボートレース", "").strip()
-      if alt_txt in PLACE_JCD_MAP:
-        active_places[alt_txt] = PLACE_JCD_MAP[alt_txt]
+    month_str = date_str[:6] + "01"
+    url_sched = f"https://www.boatrace.jp/owpc/pc/race/monthlyschedule?hd={month_str}"
+    html_sched = fetch_url(url_sched)
+
+    if html_sched:
+      soup = BeautifulSoup(html_sched, "html.parser")
+      # 日付セルから当日の開催会場リンクを探す
+      day_num = int(date_str[6:8])
+      for a_tag in soup.find_all("a", href=re.compile(r"jcd=\d{2}")):
+        href = a_tag.get("href", "")
+        m = re.search(r"jcd=(\d{2})", href)
+        if m:
+          jcd = m.group(1)
+          # 今日の日付が含まれるエリア内のリンクか検証
+          if jcd in JCD_PLACE_MAP and jcd not in active_places.values():
+            active_places[JCD_PLACE_MAP[jcd]] = jcd
+
+  # --- Route 3: 全24場ダイレクト判定（最終フォールバック） ---
+  if not active_places:
+    for place_name, jcd in PLACE_JCD_MAP.items():
+      check_url = f"https://www.boatrace.jp/owpc/pc/race/raceindex?jcd={jcd}&hd={date_str}"
+      html_check = fetch_url(check_url)
+      # 1R〜12Rのレース一覧が存在するかで判定
+      if html_check and ("rno=1" in html_check or "1R" in html_check):
+        active_places[place_name] = jcd
 
   return active_places
 
@@ -113,16 +126,14 @@ def get_purchasable_races(jcd: str, date_str: str = None) -> list:
   active_races = []
 
   if not html:
-    return list(range(1, 13))  # 取得失敗時は全レースを表示可能にする
+    return list(range(1, 13))
 
   soup = BeautifulSoup(html, "html.parser")
 
-  # 12レース分のリンク・ステータス判定
   for rno in range(1, 13):
     pattern = re.compile(rf"rno={rno}\b")
     a_tag = soup.find("a", href=pattern)
     if a_tag:
-      # 親要素から「終了」「確定」などのステータスチェック
       parent_cell = a_tag.find_parent(["td", "tr", "div"])
       cell_text = parent_cell.get_text() if parent_cell else ""
 
@@ -132,7 +143,6 @@ def get_purchasable_races(jcd: str, date_str: str = None) -> list:
         continue
       active_races.append(rno)
 
-  # パース失敗時の安全フォールバック（rnoリンクが存在するものを抽出）
   if not active_races:
     for a in soup.find_all("a", href=re.compile(r"rno=\d+")):
       m = re.search(r"rno=(\d+)", a.get("href", ""))
@@ -160,7 +170,6 @@ def check_race_time_status(jcd: str, rno: int, date_str: str = None) -> dict:
   soup = BeautifulSoup(html, "html.parser")
   text = soup.get_text()
 
-  # 「締切予定 15:24」 などのキーワード抽出
   m = re.search(r"締切予定\s*(\d{1,2}):(\d{2})", text)
   if m:
     hh, mm = int(m.group(1)), int(m.group(2))
@@ -186,7 +195,6 @@ def get_odds_data(jcd: str, rno: int, date_str: str = None):
   odds_rank_dict = {}
   trio_odds_dict = {}
 
-  # 3連単オッズ
   url_3t = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd}&hd={date_str}"
   html_3t = fetch_url(url_3t)
 
@@ -210,7 +218,6 @@ def get_odds_data(jcd: str, rno: int, date_str: str = None):
     for rank, (combo, _) in enumerate(sorted_combos, 1):
       odds_rank_dict[combo] = rank
 
-  # 3連複オッズ
   url_3f = f"https://www.boatrace.jp/owpc/pc/race/odds3f?rno={rno}&jcd={jcd}&hd={date_str}"
   html_3f = fetch_url(url_3f)
 
@@ -230,7 +237,7 @@ def get_odds_data(jcd: str, rno: int, date_str: str = None):
 
 
 def get_race_data(jcd: str, rno: int, date_str: str = None):
-  """出走表・直前情報の確実な解析（展示タイムのパース強化）"""
+  """出走表・直前情報の確実な解析"""
   if not date_str:
     date_str = get_jst_now().strftime("%Y%m%d")
 
@@ -243,9 +250,6 @@ def get_race_data(jcd: str, rno: int, date_str: str = None):
 
   if html:
     soup = BeautifulSoup(html, "html.parser")
-
-    # 展示タイムを含むセルの抽出（6.XXの数値で有効なもの）
-    # HTML内の全tdセルから6.00〜7.99の範囲の数値を抽出
     tds = soup.find_all(["td", "th", "span"])
     valid_ex_times = []
 
@@ -259,7 +263,6 @@ def get_race_data(jcd: str, rno: int, date_str: str = None):
         except ValueError:
           pass
 
-    # 1号艇〜6号艇の6艇分が揃っていれば直前情報ありと判定
     if len(valid_ex_times) >= 6:
       has_exhibit_info = True
       for b_no in range(1, 7):
